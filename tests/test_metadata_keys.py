@@ -13,7 +13,7 @@ import sys
 # Add parent directory to path
 sys.path.append(str(Path(__file__).parent.parent))
 
-from organize_photos import MetadataHandler
+from takeout_import.metadata_handler import MetadataHandler
 
 class TestMetadataKeys(unittest.TestCase):
     def setUp(self):

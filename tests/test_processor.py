@@ -12,7 +12,9 @@ from unittest.mock import MagicMock, patch
 # from unittest.mock import MagicMock
 # sys.modules['exiftool'] = MagicMock()
 
-from organize_photos import MediaProcessor, MetadataHandler, FileOrganizer
+from takeout_import.media_processor import MediaProcessor
+from takeout_import.metadata_handler import MetadataHandler
+from takeout_import.file_organizer import FileOrganizer
 
 class TestMetadataHandler(unittest.TestCase):
     def setUp(self):

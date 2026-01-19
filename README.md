@@ -45,13 +45,20 @@ A Python tool to organize media files from a Google Takeout export and restore m
 
 ## Usage
 
+### Using the Shell Script (Recommended)
+The included shell script handles virtual environment activation for you.
 ```bash
-python3 organize_photos.py [SOURCE_DIR] [DEST_DIR] [--dry-run]
+./organize_photos.sh /path/to/takeout/source /path/to/destination
 ```
 
--   `SOURCE_DIR`: Path to your extracted Google Takeout folder (e.g., `.../Takeout/Google Photos`).
--   `DEST_DIR`: Path where you want the organized files to go.
--   `--dry-run`: Optional. Prints what would happen without moving files or writing metadata.
+### Manual Usage
+```bash
+source venv/bin/activate
+python3 main.py /path/to/takeout/source /path/to/destination
+```
+
+### Options
+-   `--dry-run`: Simulate operations without moving files or writing metadata.
 
 ### Example
 
