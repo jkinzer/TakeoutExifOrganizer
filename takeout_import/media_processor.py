@@ -120,9 +120,9 @@ class MediaProcessor:
         
         # 1. Find JSON
         json_path = self.find_json_sidecar(file_path)
-        metadata = {}
+        json_metadata = {}
         if json_path:
-            metadata = self.metadata_handler.parse_json_sidecar(json_path)
+            json_metadata = self.metadata_handler.parse_json_sidecar(json_path)
         else:
             logger.warning(f"No JSON found for {file_path}")
         
@@ -135,19 +135,19 @@ class MediaProcessor:
         
         if media_timestamp and self.is_valid_timestamp(media_timestamp):
             timestamp = media_timestamp
-            logger.debug(f"Using Media Metadata timestamp: {timestamp}")
+            logger.debug(f"Using Media Metadata timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
         
         # Priority 2: JSON Metadata
         if not timestamp:
-            json_timestamp = metadata.get('timestamp')
+            json_timestamp = json_metadata.get('timestamp')
             if json_timestamp and self.is_valid_timestamp(json_timestamp):
                 timestamp = json_timestamp
-                logger.debug(f"Using JSON timestamp: {timestamp}")
+                logger.debug(f"Using JSON timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
         
         # Fallback: File Modification Time
         if not timestamp:
             timestamp = file_path.stat().st_mtime
-            logger.debug(f"Using File Mtime: {timestamp}")
+            logger.debug(f"Using File Mtime: {self._timestamp_to_str(timestamp)} ({timestamp})")
         
         # 3. Determine Target Path
         target_path = self.file_organizer.get_target_path(timestamp, file_path.name)
@@ -157,11 +157,20 @@ class MediaProcessor:
         self.file_organizer.copy_file(file_path, final_path, timestamp)
         
         # 5. Write Metadata (to the destination file)
-        if not self.dry_run and json_path:
+        if json_path:
             # Don't overwrite valid media timestamp with JSON timestamp
             # If we found a valid media timestamp, we should preserve it.
             if media_timestamp and self.is_valid_timestamp(media_timestamp):
-                if 'timestamp' in metadata:
-                    del metadata['timestamp']
+                if 'timestamp' in json_metadata:
+                    del json_metadata['timestamp']
+            
+            # Don't overwrite valid GPS with JSON GPS
+            if 'gps' in media_metadata:
+                if 'gps' in json_metadata:
+                    logger.debug(f"Preserving existing GPS metadata for {file_path}")
+                    del json_metadata['gps']
                     
-            self.metadata_handler.write_metadata(final_path, metadata)
+            self.metadata_handler.write_metadata(final_path, json_metadata, self.dry_run)
+    
+    def _timestamp_to_str(self, timestamp):
+        return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")

@@ -5,14 +5,8 @@ import argparse
 from pathlib import Path
 from takeout_import.media_processor import MediaProcessor
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(sys.stdout)
-    ]
-)
+# Configure logging - moved to main()
+# logging.basicConfig(...)
 logger = logging.getLogger(__name__)
 
 def main():
@@ -21,8 +15,20 @@ def main():
     parser.add_argument("dest", type=Path, help="Destination directory")
     parser.add_argument("--dry-run", action="store_true", help="Don't actually move/write files")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
     args = parser.parse_args()
+
+    # Configure logging
+    log_level = logging.DEBUG if args.debug else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format='%(asctime)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ],
+        force=True # Reconfigure if already configured
+    )
     
     if not args.source.exists():
         logger.error("Source directory does not exist")

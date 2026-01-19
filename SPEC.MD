@@ -13,7 +13,9 @@ This tool is a Python script designed to process a Google Takeout export of Goog
 ### Input
 -   **Source Directory**: A directory containing the extracted Google Takeout data (e.g., `.../Takeout/Google Photos`).
 -   **Recursive Scan**: The tool must scan the source directory and all subdirectories.
+-   **Parallel Processing**: The tool supports parallel processing of files using threads. The number of workers can be configured via the `--workers` argument (default: 4).
 -   **Dry Run**: The tool supports a `--dry-run` flag to simulate operations without making changes.
+-   **Debug Logging**: The tool supports a `--debug` flag to enable verbose logging.
 
 ### Output
 -   **Destination Directory**: A clean directory where organized files will be placed.
@@ -31,7 +33,17 @@ The tool will support the following extensions (case-insensitive):
 -   **Python 3.x**
 -   **ExifTool**: The script requires `exiftool` to be installed on the system.
 -   **PyExifTool**: A Python wrapper library to interact with ExifTool efficiently.
--   **Standard Libraries**: `pathlib`, `json`, `datetime`, `shutil`, `logging`.
+-   **Standard Libraries**: `pathlib`, `json`, `datetime`, `shutil`, `logging`, `concurrent.futures`.
+
+### Code Structure
+The application is structured into modular classes:
+-   `MediaProcessor`: Main controller that orchestrates the scanning and processing logic. Handles parallel execution.
+-   `MetadataHandler`: Handles parsing JSON sidecars and reading/writing metadata using `PyExifTool`.
+-   `FileOrganizer`: Handles file system operations, path resolution, and duplicate handling.
+
+### Shell Wrapper
+A shell script `organize_photos.sh` is provided to simplify execution. It automatically activates the virtual environment and runs the Python script with the provided arguments.
+Usage: `./organize_photos.sh [SOURCE] [DEST] [ARGS]`
 
 ## Detailed Logic
 

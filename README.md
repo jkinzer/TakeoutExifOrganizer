@@ -59,6 +59,7 @@ python3 main.py /path/to/takeout/source /path/to/destination
 
 ### Options
 -   `--dry-run`: Simulate operations without moving files or writing metadata.
+-   `--debug`: Enable debug logging for more detailed output.
 
 ### Example
 
