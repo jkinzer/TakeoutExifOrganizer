@@ -20,6 +20,7 @@ def main():
     parser.add_argument("source", type=Path, help="Source directory (Takeout/Google Photos)")
     parser.add_argument("dest", type=Path, help="Destination directory")
     parser.add_argument("--dry-run", action="store_true", help="Don't actually move/write files")
+    parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
     
     args = parser.parse_args()
     
@@ -38,7 +39,7 @@ def main():
         logger.error(f"Destination {args.dest} exists but is not a directory")
         sys.exit(1)
         
-    processor = MediaProcessor(args.source, args.dest, args.dry_run)
+    processor = MediaProcessor(args.source, args.dest, args.dry_run, max_workers=args.workers)
     processor.process()
 
 if __name__ == "__main__":

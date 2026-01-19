@@ -16,10 +16,11 @@ class MediaProcessor:
         '.mp4', '.mov', '.avi', '.wmv', '.3gp', '.m4v', '.mkv', '.mp'
     }
 
-    def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False):
+    def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False, max_workers: int = 4):
         self.source_dir = source_dir
         self.dest_dir = dest_dir
         self.dry_run = dry_run
+        self.max_workers = max_workers
         self.metadata_handler = MetadataHandler()
         self.file_organizer = FileOrganizer(dest_dir, dry_run)
 
@@ -88,15 +89,28 @@ class MediaProcessor:
 
     def process(self):
         """Scans and processes all files."""
-        count = 0
+        files_to_process = []
         for root, _, files in os.walk(self.source_dir):
             for file in files:
                 file_path = Path(root) / file
                 if file_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
                     continue
-                
-                count += 1
-                self.process_file(file_path)
+                files_to_process.append(file_path)
+        
+        total_files = len(files_to_process)
+        logger.info(f"Found {total_files} files to process. Using {self.max_workers} workers.")
+
+        import concurrent.futures
+        count = 0
+        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            futures = {executor.submit(self.process_file, fp): fp for fp in files_to_process}
+            for future in concurrent.futures.as_completed(futures):
+                file_path = futures[future]
+                try:
+                    future.result()
+                    count += 1
+                except Exception as e:
+                    logger.error(f"Error processing {file_path}: {e}")
         
         logger.info(f"Processed {count} files.")
 
