@@ -60,15 +60,16 @@ python3 main.py /path/to/takeout/source /path/to/destination
 ### Options
 -   `--dry-run`: Simulate operations without moving files or writing metadata.
 -   `--debug`: Enable debug logging for more detailed output.
+-   `--workers`: Number of worker threads to use for processing (default: 4).
 
 ### Example
 
 ```bash
 # Dry run to check what will happen
-python3 organize_photos.py ~/Downloads/Takeout/Google\ Photos ~/Pictures/Organized --dry-run
+./organize_photos.sh ~/Downloads/Takeout/Google\ Photos ~/Pictures/Organized --dry-run
 
 # Actual execution
-python3 organize_photos.py ~/Downloads/Takeout/Google\ Photos ~/Pictures/Organized
+./organize_photos.sh ~/Downloads/Takeout/Google\ Photos ~/Pictures/Organized
 ```
 
 ## Testing

@@ -5,8 +5,6 @@ import argparse
 from pathlib import Path
 from takeout_import.media_processor import MediaProcessor
 
-# Configure logging - moved to main()
-# logging.basicConfig(...)
 logger = logging.getLogger(__name__)
 
 def main():
@@ -20,9 +18,8 @@ def main():
     args = parser.parse_args()
 
     # Configure logging
-    log_level = logging.DEBUG if args.debug else logging.INFO
     logging.basicConfig(
-        level=log_level,
+        level=logging.DEBUG if args.debug else logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
         handlers=[
             logging.StreamHandler(sys.stdout)
