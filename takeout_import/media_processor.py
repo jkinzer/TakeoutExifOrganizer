@@ -30,14 +30,6 @@ class MediaProcessor:
         self.metadata_handler = MetadataHandler()
         self.file_organizer = FileOrganizer(dest_dir, dry_run)
 
-    def is_valid_timestamp(self, timestamp: float) -> bool:
-        """Checks if the timestamp is valid (Year >= 1999)."""
-        try:
-            dt = datetime.fromtimestamp(timestamp)
-            return dt.year >= 1999
-        except (ValueError, OSError, OverflowError):
-            return False
-
     def find_json_sidecar(self, media_path: Path) -> Optional[Path]:
         """
         Attempts to find the JSON sidecar for a media file.
@@ -109,39 +101,38 @@ class MediaProcessor:
         
         logger.info(f"Processing in {total_chunks} chunks of size {chunk_size}...")
         
-        with self.metadata_handler as mh:
-            for i in range(0, total_files, chunk_size):
-                chunk_files = files_to_process[i:i + chunk_size]
-                current_chunk = (i // chunk_size) + 1
-                logger.info(f"Processing chunk {current_chunk}/{total_chunks} ({len(chunk_files)} files)...")
+        for i in range(0, total_files, chunk_size):
+            chunk_files = files_to_process[i:i + chunk_size]
+            current_chunk = (i // chunk_size) + 1
+            logger.info(f"Processing chunk {current_chunk}/{total_chunks} ({len(chunk_files)} files)...")
+            
+            # Phase 2: Batch Read Metadata (Chunk)
+            media_metadata_map = self.metadata_handler.read_metadata_batch(chunk_files)
+            
+            # Phase 3: Process & Copy (Parallel) (Chunk)
+            write_ops = []
+            count = 0
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(self._process_single_file, file_path, media_metadata_map.get(file_path, {})): file_path 
+                    for file_path in chunk_files
+                }
                 
-                # Phase 2: Batch Read Metadata (Chunk)
-                media_metadata_map = mh.read_metadata_batch(chunk_files)
-                
-                # Phase 3: Process & Copy (Parallel) (Chunk)
-                write_ops = []
-                count = 0
-                
-                with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                    futures = {
-                        executor.submit(self._process_single_file, fp, media_metadata_map.get(fp, {})): fp 
-                        for fp in chunk_files
-                    }
-                    
-                    for future in concurrent.futures.as_completed(futures):
-                        file_path = futures[future]
-                        try:
-                            result = future.result()
-                            if result:
-                                write_ops.append(result)
-                            count += 1
-                        except Exception as e:
-                            logger.error(f"Error processing {file_path}: {e}")
-                
-                # Phase 4: Batch Write Metadata (Chunk)
-                if write_ops:
-                    logger.info(f"Batch writing metadata to {len(write_ops)} files in chunk {current_chunk}...")
-                    mh.write_metadata_batch(write_ops, self.dry_run)
+                for future in concurrent.futures.as_completed(futures):
+                    file_path = futures[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            write_ops.append(result)
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"Error processing {file_path}: {e}")
+            
+            # Phase 4: Batch Write Metadata (Chunk)
+            if write_ops:
+                logger.info(f"Batch writing metadata to {len(write_ops)} files in chunk {current_chunk}...")
+                self.metadata_handler.write_metadata_batch(write_ops, self.dry_run)
             
         logger.info("Processing complete.")
 
@@ -166,14 +157,14 @@ class MediaProcessor:
         
         timestamp = None
         
-        if media_timestamp and self.is_valid_timestamp(media_timestamp):
+        if media_timestamp and self._is_valid_timestamp(media_timestamp):
             timestamp = media_timestamp
             logger.debug(f"Using Media Metadata timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
         
         # Priority 2: JSON Metadata
         if not timestamp:
             json_timestamp = json_metadata.get('timestamp')
-            if json_timestamp and self.is_valid_timestamp(json_timestamp):
+            if json_timestamp and self._is_valid_timestamp(json_timestamp):
                 timestamp = json_timestamp
                 logger.debug(f"Using JSON timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
         
@@ -192,15 +183,14 @@ class MediaProcessor:
         # 5. Prepare Metadata Write Op
         if json_path:
             # Don't overwrite valid media timestamp with JSON timestamp
-            if media_timestamp and self.is_valid_timestamp(media_timestamp):
+            if media_timestamp and self._is_valid_timestamp(media_timestamp):
                 if 'timestamp' in json_metadata:
                     del json_metadata['timestamp']
             
             # Don't overwrite valid GPS with JSON GPS
-            if 'gps' in media_metadata:
-                if 'gps' in json_metadata:
-                    logger.debug(f"Preserving existing GPS metadata for {file_path}")
-                    del json_metadata['gps']
+            if 'gps' in media_metadata and 'gps' in json_metadata:
+                logger.debug(f"Preserving existing GPS metadata for {file_path}")
+                del json_metadata['gps']
             
             # Return the operation to be performed in batch
             return (final_path, json_metadata)
@@ -234,3 +224,11 @@ class MediaProcessor:
     def _timestamp_to_str(self, timestamp):
         """Converts timestamp to human-readable string."""
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+    def _is_valid_timestamp(self, timestamp: float) -> bool:
+        """Checks if the timestamp is valid (Year >= 1999)."""
+        try:
+            dt = datetime.fromtimestamp(timestamp)
+            return dt.year >= 1999
+        except (ValueError, OSError, OverflowError):
+            return False

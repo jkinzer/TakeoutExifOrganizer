@@ -315,7 +315,10 @@ class MetadataHandler:
                         )
                         logger.debug(f"Updated metadata for {file_path}")
                     except Exception as e:
-                        logger.error(f"ExifTool failed for {file_path}: {e}")
+                        error_msg = f"ExifTool failed for {file_path}: {e}"
+                        if hasattr(e, 'stderr') and e.stderr:
+                            error_msg += f"\nStderr: {e.stderr}"
+                        logger.error(error_msg)
                         
             finally:
                 if should_close:

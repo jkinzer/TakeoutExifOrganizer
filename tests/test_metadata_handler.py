@@ -130,5 +130,24 @@ class TestMetadataHandler(unittest.TestCase):
                 params=["-overwrite_original"]
             )
 
+    def test_write_metadata_batch_error_logging(self):
+        with patch('exiftool.ExifToolHelper') as MockHelper, \
+             patch('takeout_import.metadata_handler.logger') as mock_logger:
+            
+            mock_et = MockHelper.return_value
+            mock_et.__enter__.return_value = mock_et
+            
+            # Simulate ExifToolExecuteError with stderr
+            error = Exception("ExifTool Error")
+            error.stderr = "Some stderr output"
+            mock_et.set_tags.side_effect = error
+            
+            self.handler.write_metadata_batch([(Path("test.jpg"), {'timestamp': 123})])
+            
+            # Verify logger called with stderr
+            mock_logger.error.assert_called()
+            args, _ = mock_logger.error.call_args
+            self.assertIn("Some stderr output", args[0])
+
 if __name__ == '__main__':
     unittest.main()
