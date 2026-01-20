@@ -43,6 +43,7 @@ class TestMetadataHandler(unittest.TestCase):
             
             # Case 1: EXIF DateTimeOriginal present
             mock_et.get_tags.return_value = [{
+                'SourceFile': str(Path("dummy.jpg").resolve()),
                 'EXIF:DateTimeOriginal': '2023:01:01 12:00:00'
             }]
             
@@ -58,6 +59,7 @@ class TestMetadataHandler(unittest.TestCase):
             
             # Case 3: Invalid date string
             mock_et.get_tags.return_value = [{
+                'SourceFile': str(Path("dummy.jpg").resolve()),
                 'EXIF:DateTimeOriginal': 'invalid'
             }]
             metadata = self.handler.read_metadata(Path("dummy.jpg"))

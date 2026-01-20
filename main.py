@@ -16,6 +16,7 @@ def main():
     parser.add_argument("dest", type=Path, help="Destination directory")
     parser.add_argument("--dry-run", action="store_true", help="Don't actually move/write files")
     parser.add_argument("--workers", type=int, default=4, help="Number of parallel workers (default: 4)")
+    parser.add_argument("--batch-size", type=int, default=1000, help="Batch size for ExifTool operations (default: 1000)")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     
     args = parser.parse_args()
@@ -44,7 +45,7 @@ def main():
         logger.error(f"Destination {args.dest} exists but is not a directory")
         sys.exit(1)
         
-    processor = MediaProcessor(args.source, args.dest, args.dry_run, max_workers=args.workers)
+    processor = MediaProcessor(args.source, args.dest, args.dry_run, max_workers=args.workers, batch_size=args.batch_size)
     processor.process()
 
 if __name__ == "__main__":

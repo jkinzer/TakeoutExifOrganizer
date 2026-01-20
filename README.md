@@ -61,6 +61,7 @@ python3 main.py /path/to/takeout/source /path/to/destination
 -   `--dry-run`: Simulate operations without moving files or writing metadata.
 -   `--debug`: Enable debug logging for more detailed output.
 -   `--workers`: Number of worker threads to use for processing (default: 4).
+-   `--batch-size`: Number of files to process in a single ExifTool batch (default: 1000). Useful for large datasets.
 
 ### Example
 

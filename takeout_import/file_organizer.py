@@ -57,6 +57,6 @@ class FileOrganizer:
             
             # Update mtime
             os.utime(dest, (timestamp, timestamp))
-            logger.info(f"Copied {src.name} to {dest}")
+            logger.debug(f"Copied {src.name} to {dest}")
         except Exception as e:
             logger.error(f"Failed to copy {src} to {dest}: {e}")

@@ -84,7 +84,7 @@ class TestMediaProcessor(unittest.TestCase):
         with open(json_file, 'w') as f:
             json.dump({"photoTakenTime": {"timestamp": str(ts)}}, f)
             
-        self.processor.process_file(mp_file)
+        self.processor._process_single_file(mp_file, {})
         
         # Expected: dest/2023/06/motion.mp4
         expected_dest = self.dest_dir / "2023" / "06" / "motion.mp4"
@@ -121,62 +121,59 @@ class TestMediaProcessor(unittest.TestCase):
         with open(json_file, 'w') as f:
             json.dump({"photoTakenTime": {"timestamp": str(int(ts_json))}}, f)
             
-        # Mock read_metadata to return 2022
+        # Scenario 1: EXIF present and valid -> Should use EXIF (2022)
         ts_exif = datetime(2022, 1, 1).timestamp()
+        media_metadata = {'timestamp': ts_exif}
         
-        with patch.object(self.processor.metadata_handler, 'read_metadata') as mock_read:
-            # Scenario 1: EXIF present and valid -> Should use EXIF (2022)
-            mock_read.return_value = {'timestamp': ts_exif}
-            
-            self.processor.process_file(img)
-            
-            # Check destination
-            expected_dest = self.dest_dir / "2022" / "01" / "priority.jpg"
-            self.assertTrue(expected_dest.exists())
-            
-            # Cleanup for next scenario
-            shutil.rmtree(self.dest_dir)
-            self.dest_dir.mkdir()
-            self.processor.file_organizer = FileOrganizer(self.dest_dir) # Re-init organizer with new dir
-            
-            # Scenario 2: EXIF missing -> Should use JSON (2021)
-            mock_read.return_value = {}
-            
-            self.processor.process_file(img)
-            
-            expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
-            self.assertTrue(expected_dest.exists())
-            
-             # Cleanup
-            shutil.rmtree(self.dest_dir)
-            self.dest_dir.mkdir()
-            self.processor.file_organizer = FileOrganizer(self.dest_dir)
-
-            # Scenario 3: EXIF invalid (<1999), JSON valid -> Should use JSON (2021)
-            ts_invalid = datetime(1990, 1, 1).timestamp()
-            mock_read.return_value = {'timestamp': ts_invalid}
-            
-            self.processor.process_file(img)
-            
-            expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
-            self.assertTrue(expected_dest.exists())
-            
+        self.processor._process_single_file(img, media_metadata)
+        
+        # Check destination
+        expected_dest = self.dest_dir / "2022" / "01" / "priority.jpg"
+        self.assertTrue(expected_dest.exists())
+        
+        # Cleanup for next scenario
+        shutil.rmtree(self.dest_dir)
+        self.dest_dir.mkdir()
+        self.processor.file_organizer = FileOrganizer(self.dest_dir) # Re-init organizer with new dir
+        
+        # Scenario 2: EXIF missing -> Should use JSON (2021)
+        media_metadata = {}
+        
+        self.processor._process_single_file(img, media_metadata)
+        
+        expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
+        self.assertTrue(expected_dest.exists())
+        
             # Cleanup
-            shutil.rmtree(self.dest_dir)
-            self.dest_dir.mkdir()
-            self.processor.file_organizer = FileOrganizer(self.dest_dir)
+        shutil.rmtree(self.dest_dir)
+        self.dest_dir.mkdir()
+        self.processor.file_organizer = FileOrganizer(self.dest_dir)
 
-            # Scenario 4: EXIF invalid, JSON invalid -> Should use Mtime (2020)
-            # Update JSON to be invalid
-            with open(json_file, 'w') as f:
-                json.dump({"photoTakenTime": {"timestamp": str(int(ts_invalid))}}, f)
-            
-            mock_read.return_value = {'timestamp': ts_invalid}
-            
-            self.processor.process_file(img)
-            
-            expected_dest = self.dest_dir / "2020" / "01" / "priority.jpg"
-            self.assertTrue(expected_dest.exists())
+        # Scenario 3: EXIF invalid (<1999), JSON valid -> Should use JSON (2021)
+        ts_invalid = datetime(1990, 1, 1).timestamp()
+        media_metadata = {'timestamp': ts_invalid}
+        
+        self.processor._process_single_file(img, media_metadata)
+        
+        expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
+        self.assertTrue(expected_dest.exists())
+        
+        # Cleanup
+        shutil.rmtree(self.dest_dir)
+        self.dest_dir.mkdir()
+        self.processor.file_organizer = FileOrganizer(self.dest_dir)
+
+        # Scenario 4: EXIF invalid, JSON invalid -> Should use Mtime (2020)
+        # Update JSON to be invalid
+        with open(json_file, 'w') as f:
+            json.dump({"photoTakenTime": {"timestamp": str(int(ts_invalid))}}, f)
+        
+        media_metadata = {'timestamp': ts_invalid}
+        
+        self.processor._process_single_file(img, media_metadata)
+        
+        expected_dest = self.dest_dir / "2020" / "01" / "priority.jpg"
+        self.assertTrue(expected_dest.exists())
 
     def test_process_file_no_overwrite(self):
         # Verify that if EXIF is valid, we do NOT overwrite it with JSON
@@ -191,26 +188,21 @@ class TestMediaProcessor(unittest.TestCase):
             
         # EXIF has 2022 (Valid)
         ts_exif = datetime(2022, 1, 1).timestamp()
+        media_metadata = {'timestamp': ts_exif}
         
-        with patch.object(self.processor.metadata_handler, 'read_metadata') as mock_read:
-            mock_read.return_value = {'timestamp': ts_exif}
-            
-            # Mock write_metadata to verify what gets passed
-            with patch.object(self.processor.metadata_handler, 'write_metadata') as mock_write:
-                self.processor.process_file(img)
-                
-                # Verify write_metadata was called (maybe for other fields), 
-                # but 'timestamp' should NOT be in the metadata dict passed to it.
-                # Note: process_file passes the 'metadata' dict from JSON.
-                # We expect 'timestamp' key to be removed from it.
-                
-                args, _ = mock_write.call_args
-                passed_metadata = args[1]
-                self.assertNotIn('timestamp', passed_metadata)
-                
-                # Also verify destination is based on EXIF (2022)
-                expected_dest = self.dest_dir / "2022" / "01" / "overwrite.jpg"
-                self.assertTrue(expected_dest.exists())
+        # Call _process_single_file and check return value
+        result = self.processor._process_single_file(img, media_metadata)
+        
+        # Result should be (final_path, json_metadata)
+        self.assertIsNotNone(result)
+        final_path, json_metadata_to_write = result
+        
+        # Verify 'timestamp' is NOT in the metadata to write
+        self.assertNotIn('timestamp', json_metadata_to_write)
+        
+        # Also verify destination is based on EXIF (2022)
+        expected_dest = self.dest_dir / "2022" / "01" / "overwrite.jpg"
+        self.assertTrue(expected_dest.exists())
 
     def test_find_json_sidecar_emerging_pattern(self):
         # Setup: image.jpg and image.jpg.some.other.json

@@ -2,6 +2,7 @@ import os
 import logging
 import glob
 import re
+import concurrent.futures
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -20,11 +21,12 @@ class MediaProcessor:
 
     JSON = '.json'
 
-    def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False, max_workers: int = 4):
+    def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False, max_workers: int = 4, batch_size: int = 1000):
         self.source_dir = source_dir
         self.dest_dir = dest_dir
         self.dry_run = dry_run
         self.max_workers = max_workers
+        self.batch_size = batch_size
         self.metadata_handler = MetadataHandler()
         self.file_organizer = FileOrganizer(dest_dir, dry_run)
 
@@ -42,7 +44,6 @@ class MediaProcessor:
         Uses glob to find candidates matching the filename pattern,
         and specific logic for duplicates and edited files.
         """
-        # 1. Glob Search for sidecar JSON files
         # 1. Glob Search for sidecar JSON files
         stems_to_check = [media_path.stem]
         if media_path.stem.endswith("-edited"):
@@ -94,40 +95,61 @@ class MediaProcessor:
         return None
 
     def process(self):
-        """Scans and processes all files."""
-        files_to_process = []
-        skipped_files = 0
-        for root, _, files in os.walk(self.source_dir):
-            for file in files:
-                file_path = Path(root) / file
-                if not self._should_process(file_path):
-                    if not file_path.suffix.lower() == self.JSON:
-                        logger.info(f"Skipping {file_path}")
-                        skipped_files += 1
-                    continue
-                files_to_process.append(file_path)
-        
+        """Scans and processes all files using a batch pipeline."""
+        # Phase 1: Scan
+        files_to_process = self._scan_files()
         total_files = len(files_to_process)
-        logger.info(f"Found {total_files} files to process.")
-        logger.info(f"Skipped {skipped_files} files.")
-        logger.info(f"Processing with {self.max_workers} workers.")
-
-        import concurrent.futures
-        count = 0
-        with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-            futures = {executor.submit(self.process_file, fp): fp for fp in files_to_process}
-            for future in concurrent.futures.as_completed(futures):
-                file_path = futures[future]
-                try:
-                    future.result()
-                    count += 1
-                except Exception as e:
-                    logger.error(f"Error processing {file_path}: {e}")
         
-        logger.info(f"Processed {count} files.")
+        if len(files_to_process) == 0:
+            return
 
-    def process_file(self, file_path: Path):
-        """Processes a single media file."""
+        # Process in chunks
+        chunk_size = self.batch_size
+        total_chunks = (total_files + chunk_size - 1) // chunk_size
+        
+        logger.info(f"Processing in {total_chunks} chunks of size {chunk_size}...")
+        
+        with self.metadata_handler as mh:
+            for i in range(0, total_files, chunk_size):
+                chunk_files = files_to_process[i:i + chunk_size]
+                current_chunk = (i // chunk_size) + 1
+                logger.info(f"Processing chunk {current_chunk}/{total_chunks} ({len(chunk_files)} files)...")
+                
+                # Phase 2: Batch Read Metadata (Chunk)
+                media_metadata_map = mh.read_metadata_batch(chunk_files)
+                
+                # Phase 3: Process & Copy (Parallel) (Chunk)
+                write_ops = []
+                count = 0
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    futures = {
+                        executor.submit(self._process_single_file, fp, media_metadata_map.get(fp, {})): fp 
+                        for fp in chunk_files
+                    }
+                    
+                    for future in concurrent.futures.as_completed(futures):
+                        file_path = futures[future]
+                        try:
+                            result = future.result()
+                            if result:
+                                write_ops.append(result)
+                            count += 1
+                        except Exception as e:
+                            logger.error(f"Error processing {file_path}: {e}")
+                
+                # Phase 4: Batch Write Metadata (Chunk)
+                if write_ops:
+                    logger.info(f"Batch writing metadata to {len(write_ops)} files in chunk {current_chunk}...")
+                    mh.write_metadata_batch(write_ops, self.dry_run)
+            
+        logger.info("Processing complete.")
+
+    def _process_single_file(self, file_path: Path, media_metadata: dict) -> Optional[tuple[Path, dict]]:
+        """
+        Processes a single file: finds sidecar, determines path, copies file.
+        Returns a tuple (destination_path, json_metadata_to_write) or None if failed/skipped.
+        """
         logger.debug(f"Processing {file_path}")
         
         # 1. Find JSON
@@ -139,8 +161,7 @@ class MediaProcessor:
             logger.warning(f"No JSON found for {file_path}")
         
         # 2. Determine Timestamp
-        # Priority 1: Media Metadata (EXIF/IPTC/XMP)
-        media_metadata = self.metadata_handler.read_metadata(file_path)
+        # Priority 1: Media Metadata (EXIF/IPTC/XMP) - passed in
         media_timestamp = media_metadata.get('timestamp')
         
         timestamp = None
@@ -168,10 +189,9 @@ class MediaProcessor:
         # 4. Copy File
         self.file_organizer.copy_file(file_path, final_path, timestamp)
         
-        # 5. Write Metadata (to the destination file)
+        # 5. Prepare Metadata Write Op
         if json_path:
             # Don't overwrite valid media timestamp with JSON timestamp
-            # If we found a valid media timestamp, we should preserve it.
             if media_timestamp and self.is_valid_timestamp(media_timestamp):
                 if 'timestamp' in json_metadata:
                     del json_metadata['timestamp']
@@ -181,8 +201,31 @@ class MediaProcessor:
                 if 'gps' in json_metadata:
                     logger.debug(f"Preserving existing GPS metadata for {file_path}")
                     del json_metadata['gps']
-                    
-            self.metadata_handler.write_metadata(final_path, json_metadata, self.dry_run)
+            
+            # Return the operation to be performed in batch
+            return (final_path, json_metadata)
+            
+        return None
+
+    def _scan_files(self) -> list[Path]:
+        """Scans the source directory for files to process."""
+        files_to_process = []
+        skipped_files = 0
+
+        for root, _, files in os.walk(self.source_dir):
+            for file in files:
+                file_path = Path(root) / file
+                if not self._should_process(file_path):
+                    if not file_path.suffix.lower() == self.JSON:
+                        logger.info(f"Skipping {file_path}")
+                        skipped_files += 1
+                    continue
+                files_to_process.append(file_path)
+
+        logger.info(f"Found {len(files_to_process)} files to process.")
+        logger.info(f"Skipped {skipped_files} files.")
+
+        return files_to_process
 
     def _should_process(self, file_path: Path) -> bool:
         """Checks if the file should be processed."""
