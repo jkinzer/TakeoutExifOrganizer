@@ -29,17 +29,17 @@ A Python tool to organize media files from a Google Takeout export and restore m
     source venv/bin/activate
     ```
 
-3.  **Install Dependencies**:
+3.  **Install the Package (Editable Mode)**:
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 
 ## Installation
 
 1.  Clone this repository.
-2.  Install the Python dependencies:
+2.  **Install the Package (Editable Mode)**:
     ```bash
-    pip install -r requirements.txt
+    pip install -e .
     ```
 3.  Ensure `exiftool` is installed and in your system PATH.
 
@@ -77,5 +77,5 @@ python3 main.py /path/to/takeout/source /path/to/destination
 Run the unit tests to verify logic:
 
 ```bash
-python3 -m unittest tests/test_processor.py
+python3 -m unittest discover tests
 ```

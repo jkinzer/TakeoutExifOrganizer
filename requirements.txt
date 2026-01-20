@@ -1,9 +1,0 @@
-PyExifTool
-
-# System Dependencies:
-# ExifTool is still required by PyExifTool.
-# Installation instructions: https://exiftool.org/install.html
-#
-# Debian/Ubuntu: sudo apt install libimage-exiftool-perl
-# Fedora:        sudo dnf install perl-Image-ExifTool
-# MacOS:         brew install exiftool

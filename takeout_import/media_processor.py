@@ -1,5 +1,7 @@
 import os
 import logging
+import glob
+import re
 from pathlib import Path
 from typing import Optional
 from datetime import datetime
@@ -15,6 +17,8 @@ class MediaProcessor:
         '.jpg', '.jpeg', '.png', '.heic', '.gif', '.tif', '.tiff', '.bmp', '.webp',
         '.mp4', '.mov', '.avi', '.wmv', '.3gp', '.m4v', '.mkv', '.mp'
     }
+
+    JSON = '.json'
 
     def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False, max_workers: int = 4):
         self.source_dir = source_dir
@@ -35,50 +39,52 @@ class MediaProcessor:
     def find_json_sidecar(self, media_path: Path) -> Optional[Path]:
         """
         Attempts to find the JSON sidecar for a media file.
-        Handles:
-        - filename.ext -> filename.ext.json
-        - filename.ext -> filename.json
-        - filename(n).ext -> filename.ext(n).json
-        - filename.ext -> filename.ext.supplemental-metadata.json
-        - filename-edited.ext -> filename.ext.json
+        Uses glob to find candidates matching the filename pattern,
+        and specific logic for duplicates and edited files.
         """
-        candidates = []
-        
-        # 1. Standard: filename.ext.json
-        candidates.append(media_path.with_name(media_path.name + ".json"))
-        
-        # 2. Legacy/Simple: filename.json
-        candidates.append(media_path.with_suffix(".json"))
-        
-        # 3. Supplemental Metadata
-        candidates.append(media_path.with_name(media_path.name + ".supplemental-metadata.json"))
-        candidates.append(media_path.with_suffix(".supplemental-metadata.json"))
+        # 1. Glob Search for sidecar JSON files
+        # 1. Glob Search for sidecar JSON files
+        stems_to_check = [media_path.stem]
+        if media_path.stem.endswith("-edited"):
+            stems_to_check.append(media_path.stem[:-7])
 
-        # 4. Handle Duplicates: filename(n).ext -> filename.ext(n).json
-        # Regex to find (n) at the end of the stem
-        import re
+        candidates = []
+        for stem in stems_to_check:
+            escaped_stem = glob.escape(stem)
+            candidates.extend(list(media_path.parent.glob(f"{escaped_stem}.*json")))
+
+        if len(candidates) > 1:
+            def score_candidate(path: Path):
+                name = path.name
+                # Priority 1: filename.ext.json
+                if name == media_path.name + self.JSON:
+                    return 0
+                # Priority 2: filename.json
+                if name == media_path.stem + self.JSON:
+                    return 1
+                # Priority 3: filename.ext.*.json (e.g. filename.ext.supplemental.json)
+                if name.startswith(media_path.name + "."):
+                    return 2
+                # Priority 4: Others (e.g. filename.jp.json)
+                return 3
+
+            candidates.sort(key=score_candidate)
+            logger.debug(f"Multiple candidate JSON sidecars found for {media_path}")
+        
+        # 2. Handle Duplicates: filename(n).ext -> filename.ext(n).json
         match = re.search(r'(\(\d+\))$', media_path.stem)
         if match:
             duplicate_suffix = match.group(1) # e.g. "(1)"
             base_stem = media_path.stem[:-len(duplicate_suffix)] # e.g. "IMG_1234"
             
             # Construct: IMG_1234.jpg(1).json
-            # We need the original extension. media_path.suffix includes the dot.
-            # base_stem + suffix + duplicate_suffix + .json
-            potential_name = f"{base_stem}{media_path.suffix}{duplicate_suffix}.json"
+            potential_name = f"{base_stem}{media_path.suffix}{duplicate_suffix}{self.JSON}"
             candidates.append(media_path.with_name(potential_name))
             
             # Also try: filename(n).json (less common but possible)
-            candidates.append(media_path.with_name(media_path.stem + ".json"))
-
-        # 5. Handle Edited: filename-edited.ext -> filename.ext.json
-        if "-edited" in media_path.stem:
-            original_stem = media_path.stem.replace("-edited", "")
-            # Try filename.ext.json (using original stem)
-            original_name = original_stem + media_path.suffix
-            candidates.append(media_path.with_name(original_name + ".json"))
-            # Try filename.json (using original stem)
-            candidates.append(media_path.with_name(original_stem + ".json"))
+            legacy_duplicate = media_path.with_name(media_path.stem + self.JSON)
+            if legacy_duplicate not in candidates:
+                candidates.append(legacy_duplicate)
 
         # Check all candidates
         for candidate in candidates:
@@ -90,15 +96,21 @@ class MediaProcessor:
     def process(self):
         """Scans and processes all files."""
         files_to_process = []
+        skipped_files = 0
         for root, _, files in os.walk(self.source_dir):
             for file in files:
                 file_path = Path(root) / file
-                if file_path.suffix.lower() not in self.SUPPORTED_EXTENSIONS:
+                if not self._should_process(file_path):
+                    if not file_path.suffix.lower() == self.JSON:
+                        logger.info(f"Skipping {file_path}")
+                        skipped_files += 1
                     continue
                 files_to_process.append(file_path)
         
         total_files = len(files_to_process)
-        logger.info(f"Found {total_files} files to process. Using {self.max_workers} workers.")
+        logger.info(f"Found {total_files} files to process.")
+        logger.info(f"Skipped {skipped_files} files.")
+        logger.info(f"Processing with {self.max_workers} workers.")
 
         import concurrent.futures
         count = 0
@@ -171,6 +183,11 @@ class MediaProcessor:
                     del json_metadata['gps']
                     
             self.metadata_handler.write_metadata(final_path, json_metadata, self.dry_run)
+
+    def _should_process(self, file_path: Path) -> bool:
+        """Checks if the file should be processed."""
+        return (not file_path.stem.endswith("-edited")) and (file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS)
     
     def _timestamp_to_str(self, timestamp):
+        """Converts timestamp to human-readable string."""
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")

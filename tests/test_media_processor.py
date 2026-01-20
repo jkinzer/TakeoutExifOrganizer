@@ -212,5 +212,25 @@ class TestMediaProcessor(unittest.TestCase):
                 expected_dest = self.dest_dir / "2022" / "01" / "overwrite.jpg"
                 self.assertTrue(expected_dest.exists())
 
+    def test_find_json_sidecar_emerging_pattern(self):
+        # Setup: image.jpg and image.jpg.some.other.json
+        img = self.source_dir / "emerging.jpg"
+        img.touch()
+        json_file = self.source_dir / "emerging.jpg.some.other.json"
+        json_file.touch()
+        
+        found = self.processor.find_json_sidecar(img)
+        self.assertEqual(found, json_file)
+
+    def test_find_json_sidecar_duplicate_legacy(self):
+        # Setup: image(1).jpg and image(1).json
+        img = self.source_dir / "image(1).jpg"
+        img.touch()
+        json_file = self.source_dir / "image(1).json"
+        json_file.touch()
+        
+        found = self.processor.find_json_sidecar(img)
+        self.assertEqual(found, json_file)
+
 if __name__ == '__main__':
     unittest.main()

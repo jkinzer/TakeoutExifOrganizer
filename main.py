@@ -4,10 +4,13 @@ import logging
 import argparse
 from pathlib import Path
 from takeout_import.media_processor import MediaProcessor
+from takeout_import.utils import log_execution_time
 
 logger = logging.getLogger(__name__)
 
+@log_execution_time("Total")
 def main():
+    
     parser = argparse.ArgumentParser(description="Organize Google Takeout Photos")
     parser.add_argument("source", type=Path, help="Source directory (Takeout/Google Photos)")
     parser.add_argument("dest", type=Path, help="Destination directory")
@@ -17,7 +20,6 @@ def main():
     
     args = parser.parse_args()
 
-    # Configure logging
     logging.basicConfig(
         level=logging.DEBUG if args.debug else logging.INFO,
         format='%(asctime)s - %(levelname)s - %(message)s',
