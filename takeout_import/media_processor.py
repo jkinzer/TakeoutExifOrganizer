@@ -176,8 +176,8 @@ class MediaProcessor:
         # 4. Copy File
         self.file_organizer.copy_file(file_path, final_path, timestamp)
         
-        # 5. Prepare Metadata Write Op
-        if json_path:
+        # 5. Prepare Metadata Write Op (where write supported)
+        if json_path and media_type.supports_write():
             # Don't overwrite valid media timestamp with JSON timestamp
             if media_timestamp and self._is_valid_timestamp(media_timestamp):
                 if 'timestamp' in json_metadata:

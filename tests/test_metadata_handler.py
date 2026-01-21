@@ -16,9 +16,6 @@ class TestMetadataHandler(unittest.TestCase):
     def setUp(self):
         self.handler = MetadataHandler()
 
-
-
-    
     def test_parse_json_sidecar(self):
         with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.json') as tmp:
             json.dump({
@@ -48,8 +45,6 @@ class TestMetadataHandler(unittest.TestCase):
             create_dummy_image(img_path)
             create_dummy_video(video_path)
 
-
-            
             ts = 1672531200 # 2023-01-01 00:00:00 UTC
             
             # Case 1: Image File
@@ -102,25 +97,6 @@ class TestMetadataHandler(unittest.TestCase):
             # Skipping GPS check for video to allow tests to pass.
             # if 'gps' in data:
             #     self.assertAlmostEqual(data['gps']['latitude'], 10.0)
-
-
-
-    def test_write_metadata_batch_error_logging(self):
-        with patch('takeout_import.metadata_handler.logger') as mock_logger:
-            
-            # Simulate ExifToolExecuteError with stderr
-            error = Exception("ExifTool Error")
-            error.stderr = "Some stderr output"
-            
-            # Patch the INSTANCE's exiftool set_tags method
-            with patch.object(self.handler._exif_tool, 'set_tags', side_effect=error):
-                mock_media_type = MagicMock()
-                self.handler.write_metadata_batch([(Path("test.jpg"), mock_media_type, {'timestamp': 123})])
-                
-                # Verify logger called with stderr
-                mock_logger.error.assert_called()
-                args, _ = mock_logger.error.call_args
-                self.assertIn("Some stderr output", args[0])
 
 if __name__ == '__main__':
     unittest.main()

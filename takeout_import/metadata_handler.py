@@ -6,6 +6,7 @@ import exiftool
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any
+from exiftool.exceptions import ExifToolExecuteException
 from .media_type import MediaType
 
 logger = logging.getLogger(__name__)
@@ -166,6 +167,26 @@ class MetadataHandler:
             except (ValueError, TypeError):
                 pass
                 
+        # Extract People
+        people = []
+        for tag in ['XMP:Subject', 'XMP:PersonInImage', 'IPTC:Keywords']:
+            # Check for exact match or suffix match if needed, but we requested specific tags
+            val = None
+            if tag in data:
+                val = data[tag]
+            elif tag.split(':')[-1] in data:
+                 val = data[tag.split(':')[-1]]
+            
+            if val:
+                if isinstance(val, list):
+                    people.extend(val)
+                elif isinstance(val, str):
+                    people.append(val)
+        
+        if people:
+            # Deduplicate and sort
+            metadata['people'] = sorted(list(set(people)))
+                
         return metadata
 
     def read_metadata_batch(self, file_paths: list[tuple[Path, MediaType]]) -> Dict[Path, Dict[str, Any]]:
@@ -173,8 +194,11 @@ class MetadataHandler:
         if not file_paths:
             return {}
 
-        tags_to_read = ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates']
-
+        tags_to_read = [
+            'DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 
+            'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates',
+            'XMP:Subject', 'XMP:PersonInImage', 'IPTC:Keywords'
+        ]
 
         results = {}
         
@@ -259,11 +283,13 @@ class MetadataHandler:
                     tags['GPSCoordinates'] = f"{lat}, {lon}, {alt}"
             else:
                 if 'latitude' in gps:
-                    tags['GPSLatitude'] = gps['latitude']
-                    tags['GPSLatitudeRef'] = gps['latitude']
+                    lat = gps['latitude']
+                    tags['GPSLatitude'] = abs(lat)
+                    tags['GPSLatitudeRef'] = 'N' if lat >= 0 else 'S'
                 if 'longitude' in gps:
-                    tags['GPSLongitude'] = gps['longitude']
-                    tags['GPSLongitudeRef'] = gps['longitude']
+                    lon = gps['longitude']
+                    tags['GPSLongitude'] = abs(lon)
+                    tags['GPSLongitudeRef'] = 'E' if lon >= 0 else 'W'
                 if 'altitude' in gps:
                     tags['GPSAltitude'] = gps['altitude']
 
@@ -317,11 +343,10 @@ class MetadataHandler:
                         params=["-overwrite_original"]
                     )
                     logger.debug(f"Updated metadata for {file_path}")
+                except ExifToolExecuteException as e:
+                    logger.error(f"ExifTool failed for {file_path}: {e.stderr}")
                 except Exception as e:
-                    error_msg = f"ExifTool failed for {file_path}: {e}"
-                    if hasattr(e, 'stderr') and e.stderr:
-                        error_msg += f"\nStderr: {e.stderr}"
-                    logger.error(error_msg)
+                    logger.error(f"ExifTool failed for {file_path}: {e}")
         except Exception as e:
             logger.error(f"Batch write setup failed: {e}")
 

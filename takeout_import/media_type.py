@@ -10,13 +10,12 @@ class MediaType:
         self.supports_qt = supports_qt
         self.recognized = recognized
 
-    def supports_tags(self) -> bool:
+    def supports_write(self) -> bool:
         return self.supports_exif or self.supports_iptc or self.supports_xmp or self.supports_qt
 
 UNKNOWN = MediaType(extensions=set(), recognized=False)
 
 SUPPORTED_MEDIA: dict[str, MediaType] = {}
-SUPPORTED_EXTENSIONS: set[str] = set()
 
 for media_type in [
     MediaType(
@@ -45,7 +44,6 @@ for media_type in [
 ]:
     for ext in media_type.extensions:
         SUPPORTED_MEDIA[ext] = media_type
-        SUPPORTED_EXTENSIONS.add(ext)
 
 def get_media_type(file_path: Path) -> MediaType:
     media_type: MediaType = SUPPORTED_MEDIA.get(file_path.suffix.lower())
