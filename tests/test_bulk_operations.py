@@ -1,13 +1,12 @@
 import pytest
-import shutil
+import pytest
 import json
 import logging
-from pathlib import Path
 from datetime import datetime
 
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_processor import MediaProcessor
-from takeout_import.media_type import MediaType, SUPPORTED_MEDIA
+from takeout_import.media_type import SUPPORTED_MEDIA
 from takeout_import.media_metadata import MediaMetadata
 from tests.media_helper import create_dummy_image
 

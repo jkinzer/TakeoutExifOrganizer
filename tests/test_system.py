@@ -3,7 +3,6 @@ import json
 import logging
 import sys
 import os
-import shutil
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -11,7 +10,6 @@ from unittest.mock import MagicMock
 from takeout_import.media_type import SUPPORTED_MEDIA, MediaType
 from takeout_import.media_processor import MediaProcessor
 from takeout_import.metadata_handler import MetadataHandler
-from takeout_import.file_organizer import FileOrganizer
 from takeout_import.media_metadata import MediaMetadata
 from tests.media_helper import create_dummy_media
 
@@ -92,40 +90,35 @@ def test_all_formats_pipeline(test_dirs, handler, ext, media_type):
     # Verify Metadata
     # We need to read back the metadata from the destination file
     # Note: Not all formats support all tags, so we check based on capabilities
-    
-    # Known formats where ExifTool write might fail or is not supported
-    SKIP_WRITE_VERIFICATION = {'.avi', '.mkv', '.wmv', '.bmp', '.gif'}
-    
-    if file_path.suffix.lower() not in SKIP_WRITE_VERIFICATION:
-        if media_type.supports_write():
-            try:
-                results = handler.read_metadata_batch([(expected_dest_path, media_type)])
-                if expected_dest_path in results:
-                    metadata = results[expected_dest_path]
-                    
-                    # Verify Timestamp (should match JSON)
-                    # Allow for small precision differences if any
-                    if metadata.timestamp is not None:
-                        assert metadata.timestamp == pytest.approx(test_timestamp, abs=1.0), f"Timestamp mismatch for {file_path.suffix}"
+    if media_type.supports_write():
+        try:
+            results = handler.read_metadata_batch([(expected_dest_path, media_type)])
+            if expected_dest_path in results:
+                metadata = results[expected_dest_path]
+                
+                # Verify Timestamp (should match JSON)
+                # Allow for small precision differences if any
+                if metadata.timestamp is not None:
+                    assert metadata.timestamp == pytest.approx(test_timestamp, abs=1.0), f"Timestamp mismatch for {file_path.suffix}"
+                else:
+                    pytest.fail(f"Timestamp missing for {file_path.suffix}")
+
+                # Verify GPS (if supported)
+                if metadata.gps:
+                    gps = metadata.gps
+                    assert gps.latitude == pytest.approx(37.7749, abs=0.001), f"Latitude mismatch for {file_path.suffix}"
+                    assert gps.longitude == pytest.approx(-122.4194, abs=0.001), f"Longitude mismatch for {file_path.suffix}"
+
+                # Verify People (if supported)
+                if media_type.supports_xmp or media_type.supports_iptc:
+                    if metadata.people:
+                        expected_people = ["Person A", "Person B"]
+                        assert sorted(metadata.people) == sorted(expected_people), f"People mismatch for {file_path.suffix}"
                     else:
-                        pytest.fail(f"Timestamp missing for {file_path.suffix}")
+                        pytest.fail(f"People metadata missing for {file_path.suffix}")
 
-                    # Verify GPS (if supported)
-                    if metadata.gps:
-                        gps = metadata.gps
-                        assert gps.latitude == pytest.approx(37.7749, abs=0.001), f"Latitude mismatch for {file_path.suffix}"
-                        assert gps.longitude == pytest.approx(-122.4194, abs=0.001), f"Longitude mismatch for {file_path.suffix}"
-
-                    # Verify People (if supported)
-                    if media_type.supports_xmp or media_type.supports_iptc:
-                        if metadata.people:
-                            expected_people = ["Person A", "Person B"]
-                            assert sorted(metadata.people) == sorted(expected_people), f"People mismatch for {file_path.suffix}"
-                        else:
-                            pytest.fail(f"People metadata missing for {file_path.suffix}")
-
-            except Exception as e:
-                pytest.fail(f"Failed to verify metadata for {file_path.suffix}: {e}")
+        except Exception as e:
+            pytest.fail(f"Failed to verify metadata for {file_path.suffix}: {e}")
 
 class TestSystemLogic:
     """
@@ -252,5 +245,4 @@ class TestSystemLogic:
         # Expect 'url' to be absent from write metadata (preserved)
         assert metadata_to_write.url is None
 
-if __name__ == '__main__':
-    unittest.main()
+

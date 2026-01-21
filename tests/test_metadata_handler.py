@@ -1,8 +1,6 @@
 import pytest
 import json
-import os
-from pathlib import Path
-from datetime import datetime, timezone
+
 
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_type import SUPPORTED_MEDIA

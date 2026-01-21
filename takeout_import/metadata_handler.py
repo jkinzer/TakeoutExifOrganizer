@@ -4,11 +4,11 @@ import logging
 import json
 import exiftool
 from pathlib import Path
-from datetime import datetime, timezone
-from typing import Dict, Any, Optional, List
+
+from typing import Dict
 from exiftool.exceptions import ExifToolExecuteException
 from .media_type import MediaType
-from .media_metadata import MediaMetadata, GpsData
+from .media_metadata import MediaMetadata
 
 logger = logging.getLogger(__name__)
 

@@ -1,5 +1,5 @@
 import pytest
-from pathlib import Path
+
 from takeout_import.file_organizer import FileOrganizer
 
 @pytest.fixture

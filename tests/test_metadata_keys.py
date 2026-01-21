@@ -1,9 +1,6 @@
 import pytest
-import shutil
 import json
-import os
-import sys
-from pathlib import Path
+
 
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_type import SUPPORTED_MEDIA

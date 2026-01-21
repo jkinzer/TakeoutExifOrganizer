@@ -19,6 +19,7 @@ class MediaMetadata:
     READ_TAGS = [
         'DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 
         'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates',
+        'GPSLatitudeRef', 'GPSLongitudeRef',
         'XMP:Subject', 'XMP:PersonInImage', 'IPTC:Keywords',
         'ExifIFD:UserComment', 'XMP:UserComment'
     ]
@@ -160,6 +161,8 @@ class MediaMetadata:
         lat = None
         lon = None
         alt = None
+        lat_ref = None
+        lon_ref = None
         
         for k, v in data.items():
             if k.endswith('GPSLatitude'):
@@ -179,11 +182,23 @@ class MediaMetadata:
                             alt = parts[2]
                 except (ValueError, AttributeError):
                     pass
+            elif k.endswith('GPSLatitudeRef'):
+                lat_ref = v
+            elif k.endswith('GPSLongitudeRef'):
+                lon_ref = v
 
         if lat is not None and lon is not None:
             try:
                 lat_float = float(lat)
                 lon_float = float(lon)
+                
+                # Apply Refs if available and needed
+                if lat_ref and isinstance(lat_ref, str) and lat_ref.upper().startswith('S') and lat_float > 0:
+                    lat_float = -lat_float
+                
+                if lon_ref and isinstance(lon_ref, str) and lon_ref.upper().startswith('W') and lon_float > 0:
+                    lon_float = -lon_float
+
                 if not (lat_float == 0.0 and lon_float == 0.0):
                     alt_float = None
                     if alt is not None:
@@ -285,7 +300,8 @@ class MediaMetadata:
             lon = gps.longitude
             alt = gps.altitude if gps.altitude is not None else 0
             tags['GPSCoordinates'] = f"{lat}, {lon}, {alt}"
-        else:
+        elif media_type.supports_exif:
+            # Standard EXIF: abs + Ref
             lat = gps.latitude
             tags['GPSLatitude'] = abs(lat)
             tags['GPSLatitudeRef'] = 'N' if lat >= 0 else 'S'
@@ -296,6 +312,12 @@ class MediaMetadata:
             
             if gps.altitude is not None:
                 tags['GPSAltitude'] = gps.altitude
+        elif media_type.supports_xmp:
+            # XMP only (e.g. GIF) - Use signed values
+            tags['XMP:GPSLatitude'] = gps.latitude
+            tags['XMP:GPSLongitude'] = gps.longitude
+            if gps.altitude is not None:
+                tags['XMP:GPSAltitude'] = gps.altitude
         return tags
 
     def _prepare_people_tags(self, media_type: MediaType, people: List[str]) -> Dict[str, Any]:
