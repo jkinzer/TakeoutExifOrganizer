@@ -130,4 +130,6 @@ Ground the implementation details in the following projects and resources:
 -   **ExifTool Failures**: Log error and continue.
 
 ## Future Considerations
+-   Handle albums differently than photo directories.
+-   Prevent processing/overwriting existing files.
 -   Option to move instead of copy (to save space).
