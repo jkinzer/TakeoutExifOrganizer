@@ -15,6 +15,7 @@ sys.path.append(str(Path(__file__).parent.parent))
 
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_type import SUPPORTED_MEDIA
+from takeout_import.media_metadata import MediaMetadata
 from tests.media_helper import create_dummy_image
 
 
@@ -42,26 +43,31 @@ class TestMetadataKeys(unittest.TestCase):
             metadata = self.handler.parse_json_sidecar(tmp_path)
             
             # Verify new keys
-            self.assertEqual(metadata['url'], "https://photos.google.com/share/...")
-            self.assertEqual(metadata['people'], ["John Doe", "Jane Smith"])
+            self.assertEqual(metadata.url, "https://photos.google.com/share/...")
+            self.assertEqual(metadata.people, ["John Doe", "Jane Smith"])
             
-            # Verify Title and Description are NOT present
-            self.assertNotIn('title', metadata)
-            self.assertNotIn('description', metadata)
+            # Verify Title and Description are NOT present (attributes don't exist or are None)
+            # MediaMetadata doesn't have title/description fields, so we can't check for them in the object dict easily
+            # unless we check __dict__ or just rely on the fact that the class definition doesn't have them.
+            # But the parser shouldn't put them there.
+            self.assertFalse(hasattr(metadata, 'title'))
+            self.assertFalse(hasattr(metadata, 'description'))
             
             # Verify existing keys still work
-            self.assertEqual(metadata['timestamp'], 1672531200)
+            self.assertEqual(metadata.timestamp, 1672531200)
             
         finally:
             os.remove(tmp_path)
 
     def test_write_metadata_new_keys(self):
-        metadata = {
-            'title': "My Vacation Photo",
-            'url': "https://photos.google.com/share/...",
-            'people': ["John Doe", "Jane Smith"],
-            'description': "A beautiful view"
-        }
+        metadata = MediaMetadata(
+            url="https://photos.google.com/share/...",
+            people=["John Doe", "Jane Smith"]
+        )
+        # Note: title and description are not in MediaMetadata, so we can't pass them in constructor.
+        # The test intent was to ensure they are NOT written even if present in source (which was dict).
+        # With dataclass, we can't even pass them, so the test is slightly redundant but we can verify
+        # that what we DO pass is written.
         
         with tempfile.TemporaryDirectory() as tmpdir:
             file_path = Path(tmpdir) / "dummy.jpg"

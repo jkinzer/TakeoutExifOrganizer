@@ -9,6 +9,7 @@ from datetime import datetime
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_processor import MediaProcessor
 from takeout_import.media_type import MediaType, SUPPORTED_MEDIA
+from takeout_import.media_metadata import MediaMetadata
 from tests.media_helper import create_dummy_image
 
 class TestBulkOperations(unittest.TestCase):
@@ -59,8 +60,8 @@ class TestBulkOperations(unittest.TestCase):
         ts1 = datetime(2023, 1, 1, 12, 0, 0).timestamp()
         ts2 = datetime(2023, 1, 2, 12, 0, 0).timestamp()
         
-        self.assertEqual(results[file1]['timestamp'], ts1)
-        self.assertEqual(results[file2]['timestamp'], ts2)
+        self.assertEqual(results[file1].timestamp, ts1)
+        self.assertEqual(results[file2].timestamp, ts2)
 
 
     def test_read_metadata_batch_missing_file(self):
@@ -120,8 +121,8 @@ class TestBulkOperations(unittest.TestCase):
         mt = SUPPORTED_MEDIA.get('.jpg')
         
         write_ops = [
-            (file1, mt, {'timestamp': ts1}), 
-            (file2, mt, {'timestamp': ts2})
+            (file1, mt, MediaMetadata(timestamp=ts1)), 
+            (file2, mt, MediaMetadata(timestamp=ts2))
         ]
         
         # Call batch write
@@ -134,8 +135,8 @@ class TestBulkOperations(unittest.TestCase):
             (file2, mt)
         ])
         
-        self.assertEqual(results[file1]['timestamp'], ts1)
-        self.assertEqual(results[file2]['timestamp'], ts2)
+        self.assertEqual(results[file1].timestamp, ts1)
+        self.assertEqual(results[file2].timestamp, ts2)
 
 
     def test_chunking(self):
@@ -188,7 +189,7 @@ class TestBulkOperations(unittest.TestCase):
         mt = SUPPORTED_MEDIA.get('.jpg')
         results = processor.metadata_handler.read_metadata_batch([(dest_file, mt)])
         self.assertIn(dest_file, results)
-        self.assertEqual(results[dest_file]['timestamp'], ts_json)
+        self.assertEqual(results[dest_file].timestamp, ts_json)
 
 
 if __name__ == '__main__':

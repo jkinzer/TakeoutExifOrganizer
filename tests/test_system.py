@@ -13,6 +13,7 @@ from takeout_import.media_type import SUPPORTED_MEDIA, MediaType
 from takeout_import.media_processor import MediaProcessor
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.file_organizer import FileOrganizer
+from takeout_import.media_metadata import MediaMetadata
 from tests.media_helper import create_dummy_media
 
 # Configure logging to capture output during tests if needed
@@ -114,22 +115,22 @@ class TestSystemFormats(unittest.TestCase):
                             
                             # Verify Timestamp (should match JSON)
                             # Allow for small precision differences if any
-                            if 'timestamp' in metadata:
-                                self.assertAlmostEqual(metadata['timestamp'], test_timestamp, delta=1.0, msg=f"Timestamp mismatch for {source_path.suffix}")
+                            if metadata.timestamp is not None:
+                                self.assertAlmostEqual(metadata.timestamp, test_timestamp, delta=1.0, msg=f"Timestamp mismatch for {source_path.suffix}")
                             else:
                                 self.fail(f"Timestamp missing for {source_path.suffix}")
 
                             # Verify GPS (if supported)
-                            if 'gps' in metadata:
-                                gps = metadata['gps']
-                                self.assertAlmostEqual(gps['latitude'], 37.7749, places=3, msg=f"Latitude mismatch for {source_path.suffix}")
-                                self.assertAlmostEqual(gps['longitude'], -122.4194, places=3, msg=f"Longitude mismatch for {source_path.suffix}")
+                            if metadata.gps:
+                                gps = metadata.gps
+                                self.assertAlmostEqual(gps.latitude, 37.7749, places=3, msg=f"Latitude mismatch for {source_path.suffix}")
+                                self.assertAlmostEqual(gps.longitude, -122.4194, places=3, msg=f"Longitude mismatch for {source_path.suffix}")
 
                             # Verify People (if supported)
                             if media_type.supports_xmp or media_type.supports_iptc:
-                                if 'people' in metadata:
+                                if metadata.people:
                                     expected_people = ["Person A", "Person B"]
-                                    self.assertEqual(sorted(metadata['people']), sorted(expected_people), f"People mismatch for {source_path.suffix}")
+                                    self.assertEqual(sorted(metadata.people), sorted(expected_people), f"People mismatch for {source_path.suffix}")
                                 else:
                                     self.fail(f"People metadata missing for {source_path.suffix}")
 
@@ -175,22 +176,19 @@ class TestSystemLogic(unittest.TestCase):
         
         # Mock metadata
         self.processor.metadata_handler.read_metadata_batch.return_value = {
-            src_file: {'timestamp': timestamp}
+            src_file: MediaMetadata(timestamp=timestamp)
         }
-        self.processor.metadata_handler.parse_json_sidecar.return_value = {}
+        self.processor.metadata_handler.parse_json_sidecar.return_value = MediaMetadata()
         
-        # Mock extract_metadata and is_metadata_identical
-        self.processor.metadata_handler.extract_metadata.return_value = {'timestamp': timestamp}
-        # The processor now constructs a comparison_metadata dict. 
-        # We need to ensure is_metadata_identical returns True when called with it.
-        self.processor.metadata_handler.is_metadata_identical.return_value = True
+        # Mock extract_metadata
+        self.processor.metadata_handler.extract_metadata.return_value = MediaMetadata(timestamp=timestamp)
 
         # Run process single file
         # We expect it to return None (skipped)
         result = self.processor._process_single_file(
             src_file, 
             MediaType({'.jpg'}, True, True, True), 
-            {'timestamp': timestamp}
+            MediaMetadata(timestamp=timestamp)
         )
         
         self.assertIsNone(result)
@@ -208,13 +206,13 @@ class TestSystemLogic(unittest.TestCase):
         json_file.touch()
         
         # Mock metadata
-        media_metadata = {
-            'timestamp': 1600000000.0,
-            'people': ['Alice', 'Bob']
-        }
-        json_metadata = {
-            'people': ['Bob', 'Charlie']
-        }
+        media_metadata = MediaMetadata(
+            timestamp=1600000000.0,
+            people=['Alice', 'Bob']
+        )
+        json_metadata = MediaMetadata(
+            people=['Bob', 'Charlie']
+        )
         
         self.processor.metadata_handler.parse_json_sidecar.return_value = json_metadata
         
@@ -230,7 +228,7 @@ class TestSystemLogic(unittest.TestCase):
         path, mt, metadata_to_write = result
         
         # Expect merged: Alice, Bob, Charlie
-        self.assertEqual(metadata_to_write['people'], ['Alice', 'Bob', 'Charlie'])
+        self.assertEqual(metadata_to_write.people, ['Alice', 'Bob', 'Charlie'])
 
     def test_url_priority(self):
         filename = "url.jpg"
@@ -242,13 +240,13 @@ class TestSystemLogic(unittest.TestCase):
         json_file.touch()
         
         # Mock metadata
-        media_metadata = {
-            'timestamp': 1600000000.0,
-            'url': 'http://original.com'
-        }
-        json_metadata = {
-            'url': 'http://json.com'
-        }
+        media_metadata = MediaMetadata(
+            timestamp=1600000000.0,
+            url='http://original.com'
+        )
+        json_metadata = MediaMetadata(
+            url='http://json.com'
+        )
         
         self.processor.metadata_handler.parse_json_sidecar.return_value = json_metadata
         
@@ -264,7 +262,7 @@ class TestSystemLogic(unittest.TestCase):
         path, mt, metadata_to_write = result
         
         # Expect 'url' to be absent from write metadata (preserved)
-        self.assertNotIn('url', metadata_to_write)
+        self.assertIsNone(metadata_to_write.url)
 
 if __name__ == '__main__':
     unittest.main()

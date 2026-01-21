@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 
 from takeout_import.media_processor import MediaProcessor
 from takeout_import.file_organizer import FileOrganizer
+from takeout_import.media_metadata import MediaMetadata
 
 class TestMediaProcessor(unittest.TestCase):
     def setUp(self):
@@ -83,7 +84,7 @@ class TestMediaProcessor(unittest.TestCase):
             json.dump({"photoTakenTime": {"timestamp": str(ts)}}, f)
             
         mock_media_type = MagicMock()
-        self.processor._process_single_file(mp_file, mock_media_type, {})
+        self.processor._process_single_file(mp_file, mock_media_type, MediaMetadata())
         
         # Expected: dest/2023/06/motion.mp4
         expected_dest = self.dest_dir / "2023" / "06" / "motion.mp4"
@@ -122,7 +123,7 @@ class TestMediaProcessor(unittest.TestCase):
             
         # Scenario 1: EXIF present and valid -> Should use EXIF (2022)
         ts_exif = datetime(2022, 1, 1).timestamp()
-        media_metadata = {'timestamp': ts_exif}
+        media_metadata = MediaMetadata(timestamp=ts_exif)
         
         mock_media_type = MagicMock()
         self.processor._process_single_file(img, mock_media_type, media_metadata)
@@ -137,7 +138,7 @@ class TestMediaProcessor(unittest.TestCase):
         self.processor.file_organizer = FileOrganizer(self.dest_dir) # Re-init organizer with new dir
         
         # Scenario 2: EXIF missing -> Should use JSON (2021)
-        media_metadata = {}
+        media_metadata = MediaMetadata()
         
         self.processor._process_single_file(img, mock_media_type, media_metadata)
         
@@ -151,7 +152,7 @@ class TestMediaProcessor(unittest.TestCase):
 
         # Scenario 3: EXIF invalid (<1999), JSON valid -> Should use JSON (2021)
         ts_invalid = datetime(1990, 1, 1).timestamp()
-        media_metadata = {'timestamp': ts_invalid}
+        media_metadata = MediaMetadata(timestamp=ts_invalid)
         
         self.processor._process_single_file(img, mock_media_type, media_metadata)
         
@@ -168,7 +169,7 @@ class TestMediaProcessor(unittest.TestCase):
         with open(json_file, 'w') as f:
             json.dump({"photoTakenTime": {"timestamp": str(int(ts_invalid))}}, f)
         
-        media_metadata = {'timestamp': ts_invalid}
+        media_metadata = MediaMetadata(timestamp=ts_invalid)
         
         self.processor._process_single_file(img, mock_media_type, media_metadata)
         
@@ -188,7 +189,7 @@ class TestMediaProcessor(unittest.TestCase):
             
         # EXIF has 2022 (Valid)
         ts_exif = datetime(2022, 1, 1).timestamp()
-        media_metadata = {'timestamp': ts_exif}
+        media_metadata = MediaMetadata(timestamp=ts_exif)
         
         # Call _process_single_file and check return value
         mock_media_type = MagicMock()
@@ -198,8 +199,8 @@ class TestMediaProcessor(unittest.TestCase):
         self.assertIsNotNone(result)
         final_path, _, json_metadata_to_write = result
         
-        # Verify 'timestamp' is NOT in the metadata to write
-        self.assertNotIn('timestamp', json_metadata_to_write)
+        # Verify 'timestamp' is NOT in the metadata to write (should be None)
+        self.assertIsNone(json_metadata_to_write.timestamp)
         
         # Also verify destination is based on EXIF (2022)
         expected_dest = self.dest_dir / "2022" / "01" / "overwrite.jpg"

@@ -9,6 +9,7 @@ import subprocess
 from unittest.mock import MagicMock, patch
 from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_type import SUPPORTED_MEDIA
+from takeout_import.media_metadata import MediaMetadata, GpsData
 from tests.media_helper import create_dummy_image, create_dummy_video
 
 
@@ -31,8 +32,8 @@ class TestMetadataHandler(unittest.TestCase):
         
         try:
             metadata = self.handler.parse_json_sidecar(tmp_path)
-            self.assertEqual(metadata['timestamp'], 1672531200)
-            self.assertEqual(metadata['gps']['latitude'], 37.7749)
+            self.assertEqual(metadata.timestamp, 1672531200)
+            self.assertEqual(metadata.gps.latitude, 37.7749)
         finally:
             os.remove(tmp_path)
 
@@ -48,12 +49,12 @@ class TestMetadataHandler(unittest.TestCase):
             ts = 1672531200 # 2023-01-01 00:00:00 UTC
             
             # Case 1: Image File
-            json_metadata = {
-                'timestamp': ts,
-                'gps': {'latitude': 10.0, 'longitude': 20.0, 'altitude': 5.0},
-                'people': ['Alice', 'Bob'],
-                'url': 'http://example.com'
-            }
+            json_metadata = MediaMetadata(
+                timestamp=ts,
+                gps=GpsData(latitude=10.0, longitude=20.0, altitude=5.0),
+                people=['Alice', 'Bob'],
+                url='http://example.com'
+            )
             
             # Use real MediaType
             mt_img = SUPPORTED_MEDIA.get('.jpg')
@@ -66,10 +67,10 @@ class TestMetadataHandler(unittest.TestCase):
             self.assertIn(img_path, results)
             data = results[img_path]
             
-            self.assertEqual(data['timestamp'], ts)
-            self.assertAlmostEqual(data['gps']['latitude'], 10.0)
-            self.assertAlmostEqual(data['gps']['longitude'], 20.0)
-            self.assertAlmostEqual(data['gps']['altitude'], 5.0)
+            self.assertEqual(data.timestamp, ts)
+            self.assertAlmostEqual(data.gps.latitude, 10.0)
+            self.assertAlmostEqual(data.gps.longitude, 20.0)
+            self.assertAlmostEqual(data.gps.altitude, 5.0)
             # Note: people and url are not currently parsed back by read_metadata_batch fully (it only extracts people if in JSON sidecar logic, but _parse_exif_data only does timestamp and GPS)
             # So we can only verify timestamp and GPS with current read_metadata_batch implementation.
             # To verify others, we would need to extend _parse_exif_data or use raw exiftool.
@@ -85,9 +86,9 @@ class TestMetadataHandler(unittest.TestCase):
             self.assertIn(video_path, results)
             data = results[video_path]
             
-            self.assertEqual(data['timestamp'], ts)
-            # self.assertAlmostEqual(data['gps']['latitude'], 10.0)
-            # self.assertAlmostEqual(data['gps']['longitude'], 20.0)
+            self.assertEqual(data.timestamp, ts)
+            # self.assertAlmostEqual(data.gps.latitude, 10.0)
+            # self.assertAlmostEqual(data.gps.longitude, 20.0)
 
             # Altitude might be missing or 0 depending on video format support in ExifTool/handler
             # if 'altitude' in data.get('gps', {}):

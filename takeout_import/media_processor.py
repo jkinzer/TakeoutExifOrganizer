@@ -9,13 +9,11 @@ from datetime import datetime
 from .metadata_handler import MetadataHandler
 from .file_organizer import FileOrganizer
 from .media_type import get_media_type, MediaType
+from .media_metadata import MediaMetadata
 
 logger = logging.getLogger(__name__)
 
-TIMESTAMP = 'timestamp'
-PEOPLE = 'people'
-GPS = 'gps'
-URL = 'url'
+
 
 class MediaProcessor:
     """Main processor class."""
@@ -60,7 +58,7 @@ class MediaProcessor:
             
             with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
                 futures = {
-                    executor.submit(self._process_single_file, file_info[0], file_info[1], media_metadata_map.get(file_info[0], {})): file_info 
+                    executor.submit(self._process_single_file, file_info[0], file_info[1], media_metadata_map.get(file_info[0], MediaMetadata())): file_info 
                     for file_info in chunk_files
                 }
                 
@@ -137,7 +135,7 @@ class MediaProcessor:
         
         return None
 
-    def _process_single_file(self, file_path: Path, media_type: MediaType, media_metadata: dict) -> Optional[tuple[Path, MediaType, dict]]:
+    def _process_single_file(self, file_path: Path, media_type: MediaType, media_metadata: MediaMetadata) -> Optional[tuple[Path, MediaType, MediaMetadata]]:
         """
         Processes a single file: finds sidecar, determines path, copies file.
         Returns a tuple (destination_path, media_type, metadata_to_write) or None if failed/skipped.
@@ -146,7 +144,7 @@ class MediaProcessor:
         
         # 1. Find JSON
         json_path = self._find_json_sidecar(file_path)
-        json_metadata = {}
+        json_metadata = MediaMetadata()
         if json_path:
             json_metadata = self.metadata_handler.parse_json_sidecar(json_path)
         else:
@@ -154,7 +152,7 @@ class MediaProcessor:
         
         # 2. Determine Timestamp
         # Priority 1: Media Metadata (EXIF/IPTC/XMP) - passed in
-        media_timestamp = media_metadata.get(TIMESTAMP)
+        media_timestamp = media_metadata.timestamp
         
         timestamp = None
         
@@ -164,7 +162,7 @@ class MediaProcessor:
         
         # Priority 2: JSON Metadata
         if not timestamp:
-            json_timestamp = json_metadata.get(TIMESTAMP)
+            json_timestamp = json_metadata.timestamp
             if json_timestamp and self._is_valid_timestamp(json_timestamp):
                 timestamp = json_timestamp
                 logger.debug(f"Using JSON timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
@@ -179,28 +177,31 @@ class MediaProcessor:
         
         # Prepare Merged Metadata (Proposed Metadata)
         # We start with the JSON metadata and apply our merging rules
-        proposed_metadata = json_metadata.copy()
+        # We need to copy the object. Since it's a dataclass, we can use replace or just create a new one.
+        # But wait, we want to modify it.
+        # Let's create a copy.
+        from dataclasses import replace
+        proposed_metadata = replace(json_metadata)
         
         if json_path and media_type.supports_write():
             # Don't overwrite valid media timestamp with JSON timestamp
             if media_timestamp and self._is_valid_timestamp(media_timestamp):
-                if TIMESTAMP in proposed_metadata:
-                    del proposed_metadata[TIMESTAMP]
+                proposed_metadata.timestamp = None
             
             # Don't overwrite valid GPS with JSON GPS
-            if GPS in media_metadata and GPS in proposed_metadata:
+            if media_metadata.gps and proposed_metadata.gps:
                 logger.debug(f"Preserving existing GPS metadata for {file_path}")
-                del proposed_metadata[GPS]
+                proposed_metadata.gps = None
 
             # Merge People (Media + JSON)
-            merged_people = sorted(list(set(media_metadata.get(PEOPLE, []) + proposed_metadata.get(PEOPLE, []))))
-            if merged_people and merged_people != media_metadata.get(PEOPLE, []):
-                proposed_metadata[PEOPLE] = merged_people
+            merged_people = sorted(list(set(media_metadata.people + proposed_metadata.people)))
+            if merged_people and merged_people != media_metadata.people:
+                proposed_metadata.people = merged_people
             
             # Prioritize Media URL
-            if URL in media_metadata and URL in proposed_metadata:
+            if media_metadata.url and proposed_metadata.url:
                 logger.debug(f"Preserving existing URL metadata for {file_path}")
-                del proposed_metadata[URL]
+                proposed_metadata.url = None
         
         # Check for identical file (Duplicate Skip)
         if target_path.exists():
@@ -217,12 +218,21 @@ class MediaProcessor:
             # if we want to check if the *result* is identical.
             
             # Let's construct the "final state" metadata for comparison
-            comparison_metadata = proposed_metadata.copy()
-            for tag in [TIMESTAMP, GPS, PEOPLE, URL]:
-                if tag not in comparison_metadata and tag in media_metadata:
-                     comparison_metadata[tag] = media_metadata[tag]
+            comparison_metadata = replace(proposed_metadata)
             
-            if self.metadata_handler.is_metadata_identical(comparison_metadata, existing_metadata):
+            if comparison_metadata.timestamp is None and media_metadata.timestamp is not None:
+                comparison_metadata.timestamp = media_metadata.timestamp
+            
+            if comparison_metadata.gps is None and media_metadata.gps is not None:
+                comparison_metadata.gps = media_metadata.gps
+                
+            if not comparison_metadata.people and media_metadata.people:
+                comparison_metadata.people = media_metadata.people
+                
+            if comparison_metadata.url is None and media_metadata.url is not None:
+                comparison_metadata.url = media_metadata.url
+            
+            if comparison_metadata.is_identical(existing_metadata):
                 logger.info(f"Skipping identical file based on metadata: {file_path.name}")
                 return None
 
