@@ -23,7 +23,7 @@ This tool is a Python script designed to process a Google Takeout export of Goog
 
 ### Supported File Types
 The tool will support the following extensions (case-insensitive):
--   **Images**: JPG, JPEG, PNG, HEIC, GIF, TIF, TIFF, BMP, WEBP
+-   **Images**: JPG, JPEG, JPE, PNG, HEIC, HEIF, GIF, TIF, TIFF, BMP, WEBP
 -   **Videos**: MP4, MOV, AVI, WMV, 3GP, M4V, MKV
 -   **Other**: MP (Motion Photo) - *Note: `.mp` files will be renamed to `.mp4`.*
 
@@ -47,8 +47,19 @@ Usage: `./organize_photos.sh [SOURCE] [DEST] [ARGS]`
 
 ## Detailed Logic
 
-### 1. Scanning & Matching
-The script will iterate through all files in the source directory. For each file:
+### 1. Scanning & Batch Processing
+The script uses a chunk-based pipeline for efficiency:
+1.  **Scan**: Iterate through all files in the source directory to identify supported media files.
+2.  **Chunk Loop**: Process files in batches (default 1000).
+    *   **Batch Read**: Read metadata for the entire chunk using `exiftool` (one command).
+    *   **Process**: For each file in the chunk (parallelized):
+        *   Find JSON sidecar.
+        *   Determine target date and path.
+        *   Copy file to destination.
+        *   Prepare metadata write operations.
+    *   **Batch Write**: Write metadata updates for the chunk using `exiftool` (one command).
+
+### 2. Matching Logic
 1.  Check if it is a supported media file.
 2.  Attempt to locate its corresponding JSON sidecar file.
     *   **Matching Rules**:
@@ -73,14 +84,18 @@ From the JSON file, extract:
 ### 3. Metadata Writing (to Media)
 Using `PyExifTool`, update the media file **only if the target metadata is missing** (or as configured).
 *   **Date/Time**:
-    *   Write `DateTimeOriginal`, `CreateDate`, `ModifyDate`.
+    *   Write `DateTimeOriginal`, `CreateDate`, `ModifyDate` (EXIF).
+    *   Write `QuickTime:CreateDate`, `QuickTime:ModifyDate` (QuickTime/Video).
+    *   Write `XMP:DateCreated` (XMP).
+    *   *Timezones*: QuickTime tags are written in UTC; others in local time.
     *   *Priority*: Use JSON timestamp if media metadata is missing or invalid (Year < 1999).
 *   **GPS**:
-    *   Write `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSAltitude`.
+    *   Write `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSAltitude` (EXIF).
+    *   Write `GPSCoordinates` (QuickTime).
 *   **People**:
     *   Write `XMP:Subject`, `IPTC:Keywords`, `XMP:PersonInImage`.
 *   **URL**:
-    *   Write `ExifIFD:UserComment`.
+    *   Write `ExifIFD:UserComment`, `XMP:UserComment`.
 
 *Command Construction*:
 The tool uses `PyExifTool`'s `set_tags` method to apply changes in batch, which is more efficient and safer than constructing raw command strings.

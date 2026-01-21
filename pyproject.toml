@@ -16,6 +16,7 @@ dependencies = [
     "PyExifTool",
     "Pillow",
     "opencv-python-headless",
+    "pillow-heif",
 ]
 
 [project.urls]

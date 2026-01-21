@@ -86,13 +86,20 @@ class MetadataHandler:
         keys = data.keys()
         
         # Let's try to find the best date string
-        for priority_tag in ['DateTimeOriginal', 'CreateDate', 'ModifyDate']:
+        # Let's try to find the best date string
+        for priority_tag in ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated']:
             # Find keys that end with this tag
             matches = [k for k in keys if k.endswith(priority_tag)]
             
             exif_match = next((k for k in matches if 'EXIF' in k), None)
             if exif_match:
                 found_date = data[exif_match]
+                break
+            
+            # Prefer XMP for DateCreated
+            xmp_match = next((k for k in matches if 'XMP' in k), None)
+            if xmp_match:
+                found_date = data[xmp_match]
                 break
             
             if matches:
@@ -166,7 +173,7 @@ class MetadataHandler:
         if not file_paths:
             return {}
 
-        tags_to_read = ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates']
+        tags_to_read = ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates']
 
 
         results = {}
@@ -232,7 +239,10 @@ class MetadataHandler:
                 tags['QuickTime:TrackCreateDate'] = dt_utc_str
                 tags['QuickTime:MediaCreateDate'] = dt_utc_str
             if media_type.supports_xmp:
-                tags['XMP:DateCreated'] = dt_utc_str
+                if media_type.supports_qt:
+                    tags['XMP:DateCreated'] = dt_utc_str
+                else:
+                    tags['XMP:DateCreated'] = dt_local_str
             if media_type.supports_exif:
                 tags['DateTimeOriginal'] = dt_local_str
                 tags['CreateDate'] = dt_local_str
