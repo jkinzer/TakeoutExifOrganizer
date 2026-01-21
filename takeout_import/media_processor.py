@@ -12,6 +12,11 @@ from .media_type import get_media_type, MediaType
 
 logger = logging.getLogger(__name__)
 
+TIMESTAMP = 'timestamp'
+PEOPLE = 'people'
+GPS = 'gps'
+URL = 'url'
+
 class MediaProcessor:
     """Main processor class."""
     
@@ -135,7 +140,7 @@ class MediaProcessor:
     def _process_single_file(self, file_path: Path, media_type: MediaType, media_metadata: dict) -> Optional[tuple[Path, MediaType, dict]]:
         """
         Processes a single file: finds sidecar, determines path, copies file.
-        Returns a tuple (destination_path, json_metadata_to_write) or None if failed/skipped.
+        Returns a tuple (destination_path, media_type, metadata_to_write) or None if failed/skipped.
         """
         logger.debug(f"Processing {file_path}")
         
@@ -149,7 +154,7 @@ class MediaProcessor:
         
         # 2. Determine Timestamp
         # Priority 1: Media Metadata (EXIF/IPTC/XMP) - passed in
-        media_timestamp = media_metadata.get('timestamp')
+        media_timestamp = media_metadata.get(TIMESTAMP)
         
         timestamp = None
         
@@ -159,7 +164,7 @@ class MediaProcessor:
         
         # Priority 2: JSON Metadata
         if not timestamp:
-            json_timestamp = json_metadata.get('timestamp')
+            json_timestamp = json_metadata.get(TIMESTAMP)
             if json_timestamp and self._is_valid_timestamp(json_timestamp):
                 timestamp = json_timestamp
                 logger.debug(f"Using JSON timestamp: {self._timestamp_to_str(timestamp)} ({timestamp})")
@@ -171,25 +176,64 @@ class MediaProcessor:
         
         # 3. Determine Target Path
         target_path = self.file_organizer.get_target_path(timestamp, file_path.name)
+        
+        # Prepare Merged Metadata (Proposed Metadata)
+        # We start with the JSON metadata and apply our merging rules
+        proposed_metadata = json_metadata.copy()
+        
+        if json_path and media_type.supports_write():
+            # Don't overwrite valid media timestamp with JSON timestamp
+            if media_timestamp and self._is_valid_timestamp(media_timestamp):
+                if TIMESTAMP in proposed_metadata:
+                    del proposed_metadata[TIMESTAMP]
+            
+            # Don't overwrite valid GPS with JSON GPS
+            if GPS in media_metadata and GPS in proposed_metadata:
+                logger.debug(f"Preserving existing GPS metadata for {file_path}")
+                del proposed_metadata[GPS]
+
+            # Merge People (Media + JSON)
+            merged_people = sorted(list(set(media_metadata.get(PEOPLE, []) + proposed_metadata.get(PEOPLE, []))))
+            if merged_people and merged_people != media_metadata.get(PEOPLE, []):
+                proposed_metadata[PEOPLE] = merged_people
+            
+            # Prioritize Media URL
+            if URL in media_metadata and URL in proposed_metadata:
+                logger.debug(f"Preserving existing URL metadata for {file_path}")
+                del proposed_metadata[URL]
+        
+        # Check for identical file (Duplicate Skip)
+        if target_path.exists():
+            existing_metadata = self.metadata_handler.extract_metadata(target_path)
+            
+            # We compare the proposed metadata (what we want to write) against existing.
+            # Note: We also need to consider that if we are NOT writing a tag (because it's preserved),
+            # the 'proposed_metadata' dict might not contain it, but the existing file should have it.
+            # The is_metadata_identical check handles "effective" identity.
+            
+            # However, is_metadata_identical compares two dicts.
+            # If proposed_metadata is missing TIMESTAMP (because we preserved media's),
+            # we should technically add the preserved value back to proposed_metadata for comparison
+            # if we want to check if the *result* is identical.
+            
+            # Let's construct the "final state" metadata for comparison
+            comparison_metadata = proposed_metadata.copy()
+            for tag in [TIMESTAMP, GPS, PEOPLE, URL]:
+                if tag not in comparison_metadata and tag in media_metadata:
+                     comparison_metadata[tag] = media_metadata[tag]
+            
+            if self.metadata_handler.is_metadata_identical(comparison_metadata, existing_metadata):
+                logger.info(f"Skipping identical file based on metadata: {file_path.name}")
+                return None
+
         final_path = self.file_organizer.resolve_collision(target_path)
         
         # 4. Copy File
         self.file_organizer.copy_file(file_path, final_path, timestamp)
         
-        # 5. Prepare Metadata Write Op (where write supported)
+        # 5. Return Write Op
         if json_path and media_type.supports_write():
-            # Don't overwrite valid media timestamp with JSON timestamp
-            if media_timestamp and self._is_valid_timestamp(media_timestamp):
-                if 'timestamp' in json_metadata:
-                    del json_metadata['timestamp']
-            
-            # Don't overwrite valid GPS with JSON GPS
-            if 'gps' in media_metadata and 'gps' in json_metadata:
-                logger.debug(f"Preserving existing GPS metadata for {file_path}")
-                del json_metadata['gps']
-            
-            # Return the operation to be performed in batch
-            return (final_path, media_type, json_metadata)
+             return (final_path, media_type, proposed_metadata)
             
         return None
 

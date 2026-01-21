@@ -111,6 +111,10 @@ class MetadataHandler:
         people = self._parse_people_from_exif(data)
         if people:
             metadata['people'] = people
+
+        url = self._parse_url_from_exif(data)
+        if url:
+            metadata['url'] = url
                 
         return metadata
 
@@ -225,6 +229,20 @@ class MetadataHandler:
             return sorted(list(set(people)))
         return None
 
+    def _parse_url_from_exif(self, data: Dict[str, Any]) -> Optional[str]:
+        # Extract URL
+        for tag in ['XMP:UserComment', 'ExifIFD:UserComment']:
+             # Check for exact match or suffix match
+            val = None
+            if tag in data:
+                val = data[tag]
+            elif tag.split(':')[-1] in data:
+                 val = data[tag.split(':')[-1]]
+            
+            if val and isinstance(val, str) and val.strip():
+                return val.strip()
+        return None
+
     def read_metadata_batch(self, file_paths: list[tuple[Path, MediaType]]) -> Dict[Path, Dict[str, Any]]:
         """Reads metadata for multiple files in a batch."""
         if not file_paths:
@@ -233,7 +251,8 @@ class MetadataHandler:
         tags_to_read = [
             'DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 
             'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates',
-            'XMP:Subject', 'XMP:PersonInImage', 'IPTC:Keywords'
+            'XMP:Subject', 'XMP:PersonInImage', 'IPTC:Keywords',
+            'ExifIFD:UserComment', 'XMP:UserComment'
         ]
 
         results = {}
@@ -409,3 +428,44 @@ class MetadataHandler:
     
     def _timestamp_to_str(self, timestamp):
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")
+
+    def extract_metadata(self, file_path: Path) -> Dict[str, Any]:
+        """Extracts metadata from a single file."""
+        from .media_type import get_media_type
+        media_type = get_media_type(file_path)
+        results = self.read_metadata_batch([(file_path, media_type)])
+        return results.get(file_path, {})
+
+    def is_metadata_identical(self, meta1: Dict[str, Any], meta2: Dict[str, Any]) -> bool:
+        """Checks if two metadata dictionaries are effectively identical."""
+        # Check Timestamp (allow small tolerance)
+        ts1 = meta1.get('timestamp')
+        ts2 = meta2.get('timestamp')
+        if (ts1 is None) != (ts2 is None):
+            return False
+        if ts1 is not None and ts2 is not None:
+             if abs(ts1 - ts2) > 1.0:
+                 return False
+
+        # Check GPS
+        gps1 = meta1.get('gps')
+        gps2 = meta2.get('gps')
+        if (gps1 is None) != (gps2 is None):
+            return False
+        if gps1 and gps2:
+            if abs(gps1.get('latitude', 0) - gps2.get('latitude', 0)) > 0.0001:
+                return False
+            if abs(gps1.get('longitude', 0) - gps2.get('longitude', 0)) > 0.0001:
+                return False
+        
+        # Check People
+        people1 = sorted(meta1.get('people', []))
+        people2 = sorted(meta2.get('people', []))
+        if people1 != people2:
+            return False
+
+        # Check URL
+        if meta1.get('url') != meta2.get('url'):
+            return False
+
+        return True

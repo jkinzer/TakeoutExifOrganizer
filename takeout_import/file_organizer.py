@@ -60,3 +60,24 @@ class FileOrganizer:
             logger.debug(f"Copied {src.name} to {dest}")
         except Exception as e:
             logger.error(f"Failed to copy {src} to {dest}: {e}")
+
+    def is_identical(self, src: Path, dest: Path) -> bool:
+        """Checks if two files are identical based on size and mtime."""
+        if not dest.exists():
+            return False
+        
+        try:
+            src_stat = src.stat()
+            dest_stat = dest.stat()
+            
+            # Check size
+            if src_stat.st_size != dest_stat.st_size:
+                return False
+                
+            # Check mtime (allow small difference for float precision)
+            if abs(src_stat.st_mtime - dest_stat.st_mtime) > 1.0:
+                return False
+                
+            return True
+        except OSError:
+            return False

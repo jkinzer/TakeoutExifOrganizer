@@ -27,6 +27,8 @@ The tool will support the following extensions (case-insensitive):
 -   **Videos**: MP4, MOV, AVI, WMV, 3GP, M4V, MKV
 -   **Other**: MP (Motion Photo) - *Note: `.mp` files will be renamed to `.mp4`.*
 
+The compatibility of features for tags (EXIF, IPTC, XMP, and QuickTime) is derived from the Supported File Types at https://exiftool.org/#supported for the above file types. File types that have explicit lack of support for writability are not supported for metadata writing (for example, BMP, AVI and others listed at https://exiftool.org/#supported).
+
 *Note: Files without extensions (e.g., `IMG_1234`) should be inspected (e.g., using `python-magic` or `file` command logic) or skipped with a warning.*
 
 ### Dependencies
@@ -51,13 +53,13 @@ Usage: `./organize_photos.sh [SOURCE] [DEST] [ARGS]`
 The script uses a chunk-based pipeline for efficiency:
 1.  **Scan**: Iterate through all files in the source directory to identify supported media files.
 2.  **Chunk Loop**: Process files in batches (default 1000).
-    *   **Batch Read**: Read metadata for the entire chunk using `exiftool` (one command).
+    *   **Batch Read**: Read metadata for the entire chunk using `exiftool` (one command if possible, though it will fallback to multiple commands if needed).
     *   **Process**: For each file in the chunk (parallelized):
         *   Find JSON sidecar.
         *   Determine target date and path.
         *   Copy file to destination.
         *   Prepare metadata write operations.
-    *   **Batch Write**: Write metadata updates for the chunk using `exiftool` (one command).
+    *   **Batch Write**: Write metadata updates for the chunk using `exiftool` (one command if possible, though it will fallback to multiple commands if needed).
 
 ### 2. Matching Logic
 1.  Check if it is a supported media file.
@@ -69,47 +71,63 @@ The script uses a chunk-based pipeline for efficiency:
         *   `filename.ext` -> `filename.supplemental-metadata.json` (Supplemental Metadata)
         *   `filename(n).ext` -> `filename.ext(n).json` (Duplicate handling quirk)
         *   `filename(n).ext` -> `filename(n).json` (Duplicate handling fallback)
-        *   `filename-edited.ext` -> `filename.ext.json` or `filename.json` (Edited versions often share original JSON)
     *   *If no JSON is found, log a warning and use existing file metadata if available.*
 
 ### 2. Metadata Extraction (from JSON)
 From the JSON file, extract:
 -   **Timestamp**: `photoTakenTime.timestamp` (Unix timestamp).
 -   **GPS**: `geoData.latitude`, `geoData.longitude`, `geoData.altitude`.
--   **Timestamp**: `photoTakenTime.timestamp` (Unix timestamp).
 -   **People**: `people` (List of names).
 -   **URL**: `url` (Google Photos link).
 
-### 3. Metadata Writing (to Media)
-Using `PyExifTool`, update the media file **only if the target metadata is missing** (or as configured).
+### 4. Metadata Reading (from Media)
+Using `PyExifTool`, read the media file's metadata.
 *   **Date/Time**:
-    *   Write `DateTimeOriginal`, `CreateDate`, `ModifyDate` (EXIF).
-    *   Write `QuickTime:CreateDate`, `QuickTime:ModifyDate` (QuickTime/Video).
-    *   Write `XMP:DateCreated` (XMP).
+    *   Use `DateTimeOriginal`, `CreateDate` (EXIF).
+    *   Use `QuickTime:CreateDate` (QuickTime/Video).
+    *   Use `XMP:DateCreated` (XMP).
     *   *Timezones*: QuickTime tags are written in UTC; others in local time.
     *   *Priority*: Use JSON timestamp if media metadata is missing or invalid (Year < 1999).
 *   **GPS**:
-    *   Write `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSAltitude` (EXIF).
-    *   Write `GPSCoordinates` (QuickTime).
+    *   Use `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSAltitude` (EXIF).
+    *   Use `GPSCoordinates` (QuickTime).
 *   **People**:
-    *   Write `XMP:Subject`, `IPTC:Keywords`, `XMP:PersonInImage`.
+    *   Use `XMP:Subject`, `IPTC:Keywords`, `XMP:PersonInImage`.
 *   **URL**:
-    *   Write `ExifIFD:UserComment`, `XMP:UserComment`.
+    *   Use `ExifIFD:UserComment`, `XMP:UserComment`.
 
-*Command Construction*:
-The tool uses `PyExifTool`'s `set_tags` method to apply changes in batch, which is more efficient and safer than constructing raw command strings.
-
-### 4. File Organization
+### 5. Merge Resolved Metadata
+Using the extracted metadata from the JSON and the read metadata from the media file, merge the metadata.
 1.  Determine the **Target Date**:
     *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
         *   *Condition*: Must be a valid timestamp (Year >= 1999).
     *   **Priority 2**: JSON `photoTakenTime`.
         *   *Condition*: Must be a valid timestamp (Year >= 1999).
     *   **Fallback**: Use file modification time (`mtime`).
+2.  Determine the **Target GPS**:
+    *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
+    *   **Priority 2**: JSON `geoData`.
+3.  Determine the **Target People**:
+    *   **Merge and Deduplicate**: 
+    *   -   Media Metadata (EXIF/IPTC/XMP).
+    *   -   JSON `people`.
+4.  Determine the **Target URL**:
+    *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
+    *   **Priority 2**: JSON `url`.
+
+### 6. Metadata Writing (to Media)
+Using `PyExifTool`, update the media file **only if the target metadata is missing** (or as configured).
+*   Using the same extraction mappings as in Step #4, write the resolved metadata from Step #5 to the destination media file.
+
+*Command Construction*:
+The tool uses `PyExifTool`'s `get_tags` method to read tags in batch, which is more efficient and safer than constructing raw command strings.
+
+### 7. File Organization
+
 2.  Construct **Target Path**: `DESTINATION/YYYY/MM/filename.ext`.
 3.  **Handle Duplicates**:
     *   If `filename.ext` exists in the destination:
-        *   Check if files are identical (hash or size+mtime). If so, skip.
+        *   Check if files are identical (resolved metadata). If so, skip.
         *   If different, rename to `filename_1.ext`, `filename_2.ext`, etc.
 4.  **Copy/Move**:
     *   Copy the file to the target.
