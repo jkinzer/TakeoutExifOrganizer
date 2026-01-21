@@ -4,4 +4,4 @@ __pycache__/
 .DS_Store
 out/
 *.egg-info/
-.takeout_import.db
+.takeout_import.db*

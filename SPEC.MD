@@ -115,6 +115,10 @@ Ground the implementation details in the following projects and resources:
 -   **Corrupt Files**: Logged as `FAILED` with specific error.
 -   **Missing JSON**: Logged, proceeds with available metadata.
 
+## Bugs:
+-  Merged timestamp is null.
+-  /backup/photos/google/jeff/Takeout/Google Photos/Photos from 2010/IMG_7096.JPG was not processed because target was IMG_7096_1.JPG which did not exist.
+
 ## Future Considerations
 -   **UI/TUI**: A progress bar or terminal UI showing counts per phase.
 -   **Verification Phase**: A separate phase to verify checksums of copied files.
