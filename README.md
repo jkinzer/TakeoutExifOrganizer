@@ -11,9 +11,12 @@ A Python tool to organize media files from a Google Takeout export and restore m
 
 ## Requirements
 
--   **Python 3.6+**
+-   **Python 3.8+**
 -   **ExifTool**: The underlying engine for metadata operations.
 -   **PyExifTool**: Python wrapper for ExifTool.
+-   **Pillow**: Python Imaging Library for image processing.
+-   **pillow-heif**: HEIF support for Pillow.
+-   **opencv-python-headless**: Computer Vision library for video processing.
 
 ## Setup
 
