@@ -77,7 +77,6 @@ From the JSON file, extract:
 -   **Timestamp**: `photoTakenTime.timestamp` (Unix timestamp).
 -   **GPS**: `geoData.latitude`, `geoData.longitude`, `geoData.altitude`.
 -   **Timestamp**: `photoTakenTime.timestamp` (Unix timestamp).
--   **GPS**: `geoData.latitude`, `geoData.longitude`, `geoData.altitude`.
 -   **People**: `people` (List of names).
 -   **URL**: `url` (Google Photos link).
 
