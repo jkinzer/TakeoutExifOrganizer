@@ -2,10 +2,11 @@ import shutil
 import sys
 import logging
 import json
+import exiftool
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any
-import exiftool
+from .media_type import MediaType
 
 logger = logging.getLogger(__name__)
 
@@ -14,22 +15,19 @@ class MetadataHandler:
     
     def __init__(self):
         # PyExifTool will look for 'exiftool' in PATH by default.
-        if shutil.which("exiftool") is None:
-             logger.error("ExifTool not found in PATH. Please install ExifTool.")
-             sys.exit(1)
-        self._et = None
+        exif_tool_path = shutil.which("exiftool")
+        if exif_tool_path is None:
+            logger.error("ExifTool not found in PATH. Please install ExifTool.")
+            sys.exit(1)
+        self._exif_tool = exiftool.ExifToolHelper()
+        logger.info(f"Using ExifTool at {exif_tool_path}")
+        self._exif_tool.executable = exif_tool_path
+        self._exif_tool.run()
 
-    def __enter__(self):
-        self._et = exiftool.ExifToolHelper()
-        self._et.run()
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if self._et:
-            self._et.terminate()
-            self._et = None
-
-    VIDEO_EXTENSIONS = {'.mp4', '.mov', '.avi', '.wmv', '.3gp', '.m4v', '.mkv', '.mp'}
+    def __del__(self):
+        if self._exif_tool:
+            self._exif_tool.terminate()
+            self._exif_tool = None
 
     def parse_json_sidecar(self, json_path: Path) -> Dict[str, Any]:
         """Parses the JSON sidecar file and extracts relevant metadata."""
@@ -77,7 +75,7 @@ class MetadataHandler:
             logger.warning(f"Failed to parse JSON {json_path}: {e}")
             return {}
 
-    def _parse_exif_data(self, data: Dict[str, Any]) -> Dict[str, Any]:
+    def _parse_exif_data(self, data: Dict[str, Any], media_type: MediaType) -> Dict[str, Any]:
         """Parses raw ExifTool data into our metadata format."""
         metadata = {}
         
@@ -106,7 +104,15 @@ class MetadataHandler:
                 # Take first 19 chars for standard format
                 clean_str = str(found_date)[:19]
                 dt = datetime.strptime(clean_str, "%Y:%m:%d %H:%M:%S")
-                metadata['timestamp'] = dt.timestamp()
+                
+                if media_type.supports_qt:
+                    # Treat as UTC
+                    dt = dt.replace(tzinfo=timezone.utc)
+                    metadata['timestamp'] = dt.timestamp()
+                else:
+                    # Treat as Local
+                    metadata['timestamp'] = dt.timestamp()
+
             except ValueError:
                 pass
 
@@ -122,6 +128,18 @@ class MetadataHandler:
                 lon = v
             elif k.endswith('GPSAltitude'):
                 alt = v
+            elif k.endswith('GPSCoordinates'):
+                # QuickTime:GPSCoordinates format: "lat, lon, alt" or "lat, lon"
+                try:
+                    parts = [float(x.strip()) for x in v.split(',')]
+                    if len(parts) >= 2:
+                        lat = parts[0]
+                        lon = parts[1]
+                        if len(parts) >= 3:
+                            alt = parts[2]
+                except (ValueError, AttributeError):
+                    pass
+
         
         if lat is not None and lon is not None:
             try:
@@ -143,80 +161,64 @@ class MetadataHandler:
                 
         return metadata
 
-    def read_metadata_batch(self, file_paths: list[Path]) -> Dict[Path, Dict[str, Any]]:
+    def read_metadata_batch(self, file_paths: list[tuple[Path, MediaType]]) -> Dict[Path, Dict[str, Any]]:
         """Reads metadata for multiple files in a batch."""
         if not file_paths:
             return {}
 
-        tags_to_read = ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'GPSLatitude', 'GPSLongitude', 'GPSAltitude']
+        tags_to_read = ['DateTimeOriginal', 'CreateDate', 'ModifyDate', 'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates']
+
+
         results = {}
         
         try:
-            # Use existing instance or create temporary one
-            if self._et:
-                et = self._et
-                should_close = False
-            else:
-                et = exiftool.ExifToolHelper()
-                et.run()
-                should_close = True
+            # ExifToolHelper.get_tags accepts a list of filenames
+            file_strs = [str(f.resolve()) for f, _ in file_paths]
+            data_list = self._exif_tool.get_tags(file_strs, tags=tags_to_read, params=["-n"])
+            
+            # Map results by SourceFile
+            # ExifTool returns 'SourceFile' which matches the input path (usually absolute if input was absolute)
+            # We need to be careful about matching.
+            
+            # Create a map of resolved path string to (Path, MediaType)
+            path_map = {str(f.resolve()): (f, mt) for f, mt in file_paths}
 
-            try:
-                # ExifToolHelper.get_tags accepts a list of filenames
-                file_strs = [str(f.resolve()) for f in file_paths]
-                data_list = et.get_tags(file_strs, tags=tags_to_read, params=["-n"])
-                
-                # Map results by SourceFile
-                # ExifTool returns 'SourceFile' which matches the input path (usually absolute if input was absolute)
-                # We need to be careful about matching.
-                
-                # Create a map of resolved path string to original Path object
-                path_map = {str(f.resolve()): f for f in file_paths}
-                
-                for data in data_list:
-                    source_file = data.get('SourceFile')
-                    if source_file:
-                        # Try to find the matching Path object
-                        # ExifTool usually returns the path exactly as passed, or absolute.
-                        # We passed resolved absolute paths.
-                        
-                        # On Windows, ExifTool uses forward slashes. On Linux, it matches.
-                        # Let's normalize just in case.
-                        
-                        original_path = path_map.get(source_file)
-                        if not original_path:
-                            # Try resolving/normalizing if direct match fails
-                            try:
-                                p = Path(source_file).resolve()
-                                original_path = path_map.get(str(p))
-                            except Exception:
-                                pass
-                        
-                        if original_path:
-                            results[original_path] = self._parse_exif_data(data)
-                        else:
-                            logger.warning(f"Could not map ExifTool result for {source_file} to input files.")
+            
+            for data in data_list:
+                source_file = data.get('SourceFile')
+                if source_file:
+                    # Try to find the matching Path object
+                    # ExifTool usually returns the path exactly as passed, or absolute.
+                    # We passed resolved absolute paths.
                     
-            finally:
-                if should_close:
-                    et.terminate()
+                    # On Windows, ExifTool uses forward slashes. On Linux, it matches.
+                    # Let's normalize just in case.
+                    
+                    original_path_info = path_map.get(source_file)
+                    if not original_path_info:
+                        # Try resolving/normalizing if direct match fails
+                        try:
+                            p = Path(source_file).resolve()
+                            original_path_info = path_map.get(str(p))
+                        except Exception:
+                            pass
+                    
+                    if original_path_info:
+                        original_path, mt = original_path_info
+                        results[original_path] = self._parse_exif_data(data, mt)
+                    else:
 
+
+                        logger.warning(f"Could not map ExifTool result for {source_file} to input files.")
         except Exception as e:
             logger.error(f"Batch read failed: {e}")
             pass
             
         return results
 
-    def read_metadata(self, file_path: Path) -> Dict[str, Any]:
-        """Reads metadata from the media file using PyExifTool."""
-        # Re-use batch logic for single file
-        results = self.read_metadata_batch([file_path])
-        return results.get(file_path, {})
-
-    def _prepare_write_tags(self, file_path: Path, json_metadata: Dict[str, Any]) -> Dict[str, Any]:
+    def _prepare_write_tags(self, file_path: Path, media_type: MediaType, json_metadata: Dict[str, Any]) -> Dict[str, Any]:
         """Prepares the tags dictionary for writing."""
         tags = {}
-        is_video = file_path.suffix.lower() in self.VIDEO_EXTENSIONS
         
         # Date/Time
         if 'timestamp' in json_metadata:
@@ -224,13 +226,14 @@ class MetadataHandler:
             dt_local_str = datetime.fromtimestamp(ts).strftime("%Y:%m:%d %H:%M:%S")
             dt_utc_str = datetime.fromtimestamp(ts, timezone.utc).strftime("%Y:%m:%d %H:%M:%S")
             
-            if is_video:
+            if media_type.supports_qt:
                 tags['QuickTime:CreateDate'] = dt_utc_str
                 tags['QuickTime:ModifyDate'] = dt_utc_str
                 tags['QuickTime:TrackCreateDate'] = dt_utc_str
                 tags['QuickTime:MediaCreateDate'] = dt_utc_str
+            if media_type.supports_xmp:
                 tags['XMP:DateCreated'] = dt_utc_str
-            else:
+            if media_type.supports_exif:
                 tags['DateTimeOriginal'] = dt_local_str
                 tags['CreateDate'] = dt_local_str
                 tags['ModifyDate'] = dt_local_str
@@ -238,12 +241,12 @@ class MetadataHandler:
         # GPS
         if 'gps' in json_metadata:
             gps = json_metadata['gps']
-            if is_video:
+            if media_type.supports_qt:
                 if 'latitude' in gps and 'longitude' in gps:
                     lat = gps['latitude']
                     lon = gps['longitude']
                     alt = gps.get('altitude', 0)
-                    tags['QuickTime:GPSCoordinates'] = f"{lat}, {lon}, {alt}"
+                    tags['GPSCoordinates'] = f"{lat}, {lon}, {alt}"
             else:
                 if 'latitude' in gps:
                     tags['GPSLatitude'] = gps['latitude']
@@ -257,31 +260,30 @@ class MetadataHandler:
         # People
         if 'people' in json_metadata:
             people = json_metadata['people']
-            tags['XMP:Subject'] = people
-            tags['XMP:PersonInImage'] = people
-            if not is_video:
+            if media_type.supports_xmp:
+                tags['XMP:Subject'] = people
+                tags['XMP:PersonInImage'] = people
+            if media_type.supports_iptc:
                 tags['IPTC:Keywords'] = people
 
         # URL
         if 'url' in json_metadata:
-            if is_video:
+            if media_type.supports_xmp:
                 tags['XMP:UserComment'] = json_metadata['url']
-            else:
+            if media_type.supports_exif:
                 tags['ExifIFD:UserComment'] = json_metadata['url']
                 
         return tags
 
-    def write_metadata_batch(self, write_ops: list[tuple[Path, Dict[str, Any]]], dry_run: bool = False):
+    def write_metadata_batch(self, write_ops: list[tuple[Path, MediaType, Dict[str, Any]]], dry_run: bool = False):
         """Writes metadata for multiple files in a batch."""
         if not write_ops:
             return
 
         # Filter out empty ops and prepare tags
         valid_ops = []
-        for file_path, metadata in write_ops:
-            if not metadata:
-                continue
-            tags = self._prepare_write_tags(file_path, metadata)
+        for file_path, media_type, metadata in write_ops:
+            tags = self._prepare_write_tags(file_path, media_type, metadata)
             if tags:
                 valid_ops.append((file_path, tags))
 
@@ -294,42 +296,28 @@ class MetadataHandler:
             return
 
         try:
-            if self._et:
-                et = self._et
-                should_close = False
-            else:
-                et = exiftool.ExifToolHelper()
-                et.run()
-                should_close = True
-            
-            try:
-                # PyExifTool doesn't have a direct "batch set_tags with different tags per file" method easily accessible 
-                # without using execute directly or looping.
-                # However, we can loop efficiently if the process is open.
-                for file_path, tags in valid_ops:
-                    try:
-                        et.set_tags(
-                            [str(file_path)],
-                            tags=tags,
-                            params=["-overwrite_original"]
-                        )
-                        logger.debug(f"Updated metadata for {file_path}")
-                    except Exception as e:
-                        error_msg = f"ExifTool failed for {file_path}: {e}"
-                        if hasattr(e, 'stderr') and e.stderr:
-                            error_msg += f"\nStderr: {e.stderr}"
-                        logger.error(error_msg)
-                        
-            finally:
-                if should_close:
-                    et.terminate()
-                    
+            # PyExifTool doesn't have a direct "batch set_tags with different tags per file" method easily accessible 
+            # without using execute directly or looping.
+            # However, we can loop efficiently if the process is open.
+            for file_path, tags in valid_ops:
+                try:
+                    self._exif_tool.set_tags(
+                        [str(file_path)],
+                        tags=tags,
+                        params=["-overwrite_original"]
+                    )
+                    logger.debug(f"Updated metadata for {file_path}")
+                except Exception as e:
+                    error_msg = f"ExifTool failed for {file_path}: {e}"
+                    if hasattr(e, 'stderr') and e.stderr:
+                        error_msg += f"\nStderr: {e.stderr}"
+                    logger.error(error_msg)
         except Exception as e:
-             logger.error(f"Batch write setup failed: {e}")
+            logger.error(f"Batch write setup failed: {e}")
 
-    def write_metadata(self, file_path: Path, json_metadata: Dict[str, Any], dry_run: bool = False):
+    def write_metadata(self, file_path: Path, media_type: MediaType, json_metadata: Dict[str, Any], dry_run: bool = False):
         """Writes metadata to the media file using PyExifTool."""
-        self.write_metadata_batch([(file_path, json_metadata)], dry_run)
+        self.write_metadata_batch([(file_path, media_type, json_metadata)], dry_run)
     
     def _timestamp_to_str(self, timestamp):
         return datetime.fromtimestamp(timestamp).strftime("%Y-%m-%d %H:%M:%S")

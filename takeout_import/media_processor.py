@@ -8,17 +8,13 @@ from typing import Optional
 from datetime import datetime
 from .metadata_handler import MetadataHandler
 from .file_organizer import FileOrganizer
+from .media_type import get_media_type, MediaType
 
 logger = logging.getLogger(__name__)
 
 class MediaProcessor:
     """Main processor class."""
     
-    SUPPORTED_EXTENSIONS = {
-        '.jpg', '.jpeg', '.png', '.heic', '.gif', '.tif', '.tiff', '.bmp', '.webp',
-        '.mp4', '.mov', '.avi', '.wmv', '.3gp', '.m4v', '.mkv', '.mp'
-    }
-
     JSON = '.json'
 
     def __init__(self, source_dir: Path, dest_dir: Path, dry_run: bool = False, max_workers: int = 4, batch_size: int = 1000):
@@ -30,7 +26,57 @@ class MediaProcessor:
         self.metadata_handler = MetadataHandler()
         self.file_organizer = FileOrganizer(dest_dir, dry_run)
 
-    def find_json_sidecar(self, media_path: Path) -> Optional[Path]:
+    def process(self):
+        """Scans and processes all files using a batch pipeline."""
+        # Phase 1: Scan
+        files_to_process = self._scan_files()
+        total_files = len(files_to_process)
+        
+        if len(files_to_process) == 0:
+            return
+
+        # Process in chunks
+        chunk_size = self.batch_size
+        total_chunks = (total_files + chunk_size - 1) // chunk_size
+        
+        logger.info(f"Processing in {total_chunks} chunks of size {chunk_size}...")
+        
+        for i in range(0, total_files, chunk_size):
+            chunk_files = files_to_process[i:i + chunk_size]
+            current_chunk = (i // chunk_size) + 1
+            logger.info(f"Processing chunk {current_chunk}/{total_chunks} ({len(chunk_files)} files)...")
+            
+            # Phase 2: Batch Read Metadata (Chunk)
+            media_metadata_map = self.metadata_handler.read_metadata_batch(chunk_files)
+            
+            # Phase 3: Process & Copy (Parallel) (Chunk)
+            write_ops = []
+            count = 0
+            
+            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                futures = {
+                    executor.submit(self._process_single_file, file_info[0], file_info[1], media_metadata_map.get(file_info[0], {})): file_info 
+                    for file_info in chunk_files
+                }
+                
+                for future in concurrent.futures.as_completed(futures):
+                    file_info = futures[future]
+                    try:
+                        result = future.result()
+                        if result:
+                            write_ops.append((result))
+                        count += 1
+                    except Exception as e:
+                        logger.error(f"Error processing {file_info[0]}: {e}")
+            
+            # Phase 4: Batch Write Metadata (Chunk)
+            if write_ops:
+                logger.info(f"Batch writing metadata to {len(write_ops)} files in chunk {current_chunk}...")
+                self.metadata_handler.write_metadata_batch(write_ops, self.dry_run)
+            
+        logger.info("Processing complete.")
+
+    def _find_json_sidecar(self, media_path: Path) -> Optional[Path]:
         """
         Attempts to find the JSON sidecar for a media file.
         Uses glob to find candidates matching the filename pattern,
@@ -86,57 +132,7 @@ class MediaProcessor:
         
         return None
 
-    def process(self):
-        """Scans and processes all files using a batch pipeline."""
-        # Phase 1: Scan
-        files_to_process = self._scan_files()
-        total_files = len(files_to_process)
-        
-        if len(files_to_process) == 0:
-            return
-
-        # Process in chunks
-        chunk_size = self.batch_size
-        total_chunks = (total_files + chunk_size - 1) // chunk_size
-        
-        logger.info(f"Processing in {total_chunks} chunks of size {chunk_size}...")
-        
-        for i in range(0, total_files, chunk_size):
-            chunk_files = files_to_process[i:i + chunk_size]
-            current_chunk = (i // chunk_size) + 1
-            logger.info(f"Processing chunk {current_chunk}/{total_chunks} ({len(chunk_files)} files)...")
-            
-            # Phase 2: Batch Read Metadata (Chunk)
-            media_metadata_map = self.metadata_handler.read_metadata_batch(chunk_files)
-            
-            # Phase 3: Process & Copy (Parallel) (Chunk)
-            write_ops = []
-            count = 0
-            
-            with concurrent.futures.ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                futures = {
-                    executor.submit(self._process_single_file, file_path, media_metadata_map.get(file_path, {})): file_path 
-                    for file_path in chunk_files
-                }
-                
-                for future in concurrent.futures.as_completed(futures):
-                    file_path = futures[future]
-                    try:
-                        result = future.result()
-                        if result:
-                            write_ops.append(result)
-                        count += 1
-                    except Exception as e:
-                        logger.error(f"Error processing {file_path}: {e}")
-            
-            # Phase 4: Batch Write Metadata (Chunk)
-            if write_ops:
-                logger.info(f"Batch writing metadata to {len(write_ops)} files in chunk {current_chunk}...")
-                self.metadata_handler.write_metadata_batch(write_ops, self.dry_run)
-            
-        logger.info("Processing complete.")
-
-    def _process_single_file(self, file_path: Path, media_metadata: dict) -> Optional[tuple[Path, dict]]:
+    def _process_single_file(self, file_path: Path, media_type: MediaType, media_metadata: dict) -> Optional[tuple[Path, MediaType, dict]]:
         """
         Processes a single file: finds sidecar, determines path, copies file.
         Returns a tuple (destination_path, json_metadata_to_write) or None if failed/skipped.
@@ -144,7 +140,7 @@ class MediaProcessor:
         logger.debug(f"Processing {file_path}")
         
         # 1. Find JSON
-        json_path = self.find_json_sidecar(file_path)
+        json_path = self._find_json_sidecar(file_path)
         json_metadata = {}
         if json_path:
             json_metadata = self.metadata_handler.parse_json_sidecar(json_path)
@@ -193,11 +189,11 @@ class MediaProcessor:
                 del json_metadata['gps']
             
             # Return the operation to be performed in batch
-            return (final_path, json_metadata)
+            return (final_path, media_type, json_metadata)
             
         return None
 
-    def _scan_files(self) -> list[Path]:
+    def _scan_files(self) -> list[tuple[Path, MediaType]]:
         """Scans the source directory for files to process."""
         files_to_process = []
         skipped_files = 0
@@ -205,21 +201,22 @@ class MediaProcessor:
         for root, _, files in os.walk(self.source_dir):
             for file in files:
                 file_path = Path(root) / file
-                if not self._should_process(file_path):
+                media_type = get_media_type(file_path)
+                if not self._should_process(file_path, media_type):
                     if not file_path.suffix.lower() == self.JSON:
                         logger.info(f"Skipping {file_path}")
                         skipped_files += 1
                     continue
-                files_to_process.append(file_path)
+                files_to_process.append((file_path, media_type))
 
         logger.info(f"Found {len(files_to_process)} files to process.")
         logger.info(f"Skipped {skipped_files} files.")
 
         return files_to_process
 
-    def _should_process(self, file_path: Path) -> bool:
+    def _should_process(self, file_path: Path, media_type: MediaType) -> bool:
         """Checks if the file should be processed."""
-        return (not file_path.stem.endswith("-edited")) and (file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS)
+        return (not file_path.stem.endswith("-edited")) and (media_type.recognized)
     
     def _timestamp_to_str(self, timestamp):
         """Converts timestamp to human-readable string."""

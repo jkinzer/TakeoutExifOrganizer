@@ -14,9 +14,7 @@ class TestMediaProcessor(unittest.TestCase):
     def setUp(self):
         self.source_dir = Path(tempfile.mkdtemp())
         self.dest_dir = Path(tempfile.mkdtemp())
-        # Mock shutil.which to return a path so MetadataHandler doesn't exit
-        with patch('shutil.which', return_value='/usr/bin/exiftool'):
-            self.processor = MediaProcessor(self.source_dir, self.dest_dir)
+        self.processor = MediaProcessor(self.source_dir, self.dest_dir)
 
     def tearDown(self):
         shutil.rmtree(self.source_dir)
@@ -29,7 +27,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image.jpg.json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_find_json_sidecar_legacy(self):
@@ -39,7 +37,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image.json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_find_json_sidecar_edited(self):
@@ -49,7 +47,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image.json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_find_json_sidecar_duplicate(self):
@@ -59,7 +57,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image.jpg(1).json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_find_json_sidecar_supplemental(self):
@@ -69,7 +67,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image.jpg.supplemental-metadata.json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_motion_photo_mp_renaming(self):
@@ -84,7 +82,8 @@ class TestMediaProcessor(unittest.TestCase):
         with open(json_file, 'w') as f:
             json.dump({"photoTakenTime": {"timestamp": str(ts)}}, f)
             
-        self.processor._process_single_file(mp_file, {})
+        mock_media_type = MagicMock()
+        self.processor._process_single_file(mp_file, mock_media_type, {})
         
         # Expected: dest/2023/06/motion.mp4
         expected_dest = self.dest_dir / "2023" / "06" / "motion.mp4"
@@ -97,15 +96,15 @@ class TestMediaProcessor(unittest.TestCase):
     def test_is_valid_timestamp(self):
         # 2023 = Valid
         ts_2023 = datetime(2023, 1, 1).timestamp()
-        self.assertTrue(self.processor.is_valid_timestamp(ts_2023))
+        self.assertTrue(self.processor._is_valid_timestamp(ts_2023))
         
         # 1999 = Valid
         ts_1999 = datetime(1999, 1, 1).timestamp()
-        self.assertTrue(self.processor.is_valid_timestamp(ts_1999))
+        self.assertTrue(self.processor._is_valid_timestamp(ts_1999))
         
         # 1998 = Invalid
         ts_1998 = datetime(1998, 12, 31).timestamp()
-        self.assertFalse(self.processor.is_valid_timestamp(ts_1998))
+        self.assertFalse(self.processor._is_valid_timestamp(ts_1998))
 
     def test_process_file_priority(self):
         # Setup file
@@ -125,7 +124,8 @@ class TestMediaProcessor(unittest.TestCase):
         ts_exif = datetime(2022, 1, 1).timestamp()
         media_metadata = {'timestamp': ts_exif}
         
-        self.processor._process_single_file(img, media_metadata)
+        mock_media_type = MagicMock()
+        self.processor._process_single_file(img, mock_media_type, media_metadata)
         
         # Check destination
         expected_dest = self.dest_dir / "2022" / "01" / "priority.jpg"
@@ -139,12 +139,12 @@ class TestMediaProcessor(unittest.TestCase):
         # Scenario 2: EXIF missing -> Should use JSON (2021)
         media_metadata = {}
         
-        self.processor._process_single_file(img, media_metadata)
+        self.processor._process_single_file(img, mock_media_type, media_metadata)
         
         expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
         self.assertTrue(expected_dest.exists())
         
-            # Cleanup
+        # Cleanup
         shutil.rmtree(self.dest_dir)
         self.dest_dir.mkdir()
         self.processor.file_organizer = FileOrganizer(self.dest_dir)
@@ -153,7 +153,7 @@ class TestMediaProcessor(unittest.TestCase):
         ts_invalid = datetime(1990, 1, 1).timestamp()
         media_metadata = {'timestamp': ts_invalid}
         
-        self.processor._process_single_file(img, media_metadata)
+        self.processor._process_single_file(img, mock_media_type, media_metadata)
         
         expected_dest = self.dest_dir / "2021" / "01" / "priority.jpg"
         self.assertTrue(expected_dest.exists())
@@ -170,7 +170,7 @@ class TestMediaProcessor(unittest.TestCase):
         
         media_metadata = {'timestamp': ts_invalid}
         
-        self.processor._process_single_file(img, media_metadata)
+        self.processor._process_single_file(img, mock_media_type, media_metadata)
         
         expected_dest = self.dest_dir / "2020" / "01" / "priority.jpg"
         self.assertTrue(expected_dest.exists())
@@ -191,11 +191,12 @@ class TestMediaProcessor(unittest.TestCase):
         media_metadata = {'timestamp': ts_exif}
         
         # Call _process_single_file and check return value
-        result = self.processor._process_single_file(img, media_metadata)
+        mock_media_type = MagicMock()
+        result = self.processor._process_single_file(img, mock_media_type, media_metadata)
         
-        # Result should be (final_path, json_metadata)
+        # Result should be (final_path, media_type, json_metadata)
         self.assertIsNotNone(result)
-        final_path, json_metadata_to_write = result
+        final_path, _, json_metadata_to_write = result
         
         # Verify 'timestamp' is NOT in the metadata to write
         self.assertNotIn('timestamp', json_metadata_to_write)
@@ -211,7 +212,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "emerging.jpg.some.other.json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
     def test_find_json_sidecar_duplicate_legacy(self):
@@ -221,7 +222,7 @@ class TestMediaProcessor(unittest.TestCase):
         json_file = self.source_dir / "image(1).json"
         json_file.touch()
         
-        found = self.processor.find_json_sidecar(img)
+        found = self.processor._find_json_sidecar(img)
         self.assertEqual(found, json_file)
 
 if __name__ == '__main__':
