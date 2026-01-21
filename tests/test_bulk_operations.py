@@ -8,6 +8,7 @@ from takeout_import.metadata_handler import MetadataHandler
 from takeout_import.media_processor import MediaProcessor
 from takeout_import.media_type import SUPPORTED_MEDIA
 from takeout_import.media_metadata import MediaMetadata
+from takeout_import.persistence_manager import PersistenceManager
 from tests.media_helper import create_dummy_image
 
 @pytest.fixture
@@ -144,16 +145,16 @@ def test_chunking(test_dirs, caplog):
         files.append(f)
 
     # Initialize Processor with batch_size=2
-    processor = MediaProcessor(source_dir, dest_dir, batch_size=2)
+    processor = MediaProcessor(source_dir, dest_dir, PersistenceManager.in_memory(), batch_size=2)
     
     # Run Process and check logs
     with caplog.at_level(logging.INFO):
         processor.process()
         
         # Verify chunk messages
-        # Should see "Processing chunk 1/2" and "Processing chunk 2/2"
-        assert any("Processing chunk 1/2" in r.message for r in caplog.records)
-        assert any("Processing chunk 2/2" in r.message for r in caplog.records)
+        # Should see "Processing batch of 2 files..." and "Processing batch of 1 files..."
+        assert any("Processing batch of 2 files" in r.message for r in caplog.records)
+        assert any("Processing batch of 1 files" in r.message for r in caplog.records)
 
 def test_media_processor_pipeline(test_dirs):
     source_dir, dest_dir = test_dirs
@@ -168,7 +169,7 @@ def test_media_processor_pipeline(test_dirs):
         json.dump({"photoTakenTime": {"timestamp": str(int(ts_json))}}, f)
         
     # Initialize Processor
-    processor = MediaProcessor(source_dir, dest_dir)
+    processor = MediaProcessor(source_dir, dest_dir, PersistenceManager.in_memory())
     
     # Run Process
     processor.process()

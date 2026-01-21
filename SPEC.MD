@@ -47,91 +47,58 @@ The application is structured into modular classes:
 A shell script `organize_photos.sh` is provided to simplify execution. It automatically activates the virtual environment and runs the Python script with the provided arguments.
 Usage: `./organize_photos.sh [SOURCE] [DEST] [ARGS]`
 
-## Detailed Logic
+## Persistence & State Management
+To support large datasets (100k+ files) and resumability, the tool uses a persistence layer to track the state of every file.
+-   **PersistenceManager**: A class implementing a persistence layer for file state management.
+-   Supports both in-memory and file-based persistence.
+-   File-based persistence is the default, with in-memory useful for transient runs or testing.
 
-### 1. Scanning & Batch Processing
-The script uses a chunk-based pipeline for efficiency:
-1.  **Scan**: Iterate through all files in the source directory to identify supported media files.
-2.  **Chunk Loop**: Process files in batches (default 1000).
-    *   **Batch Read**: Read metadata for the entire chunk using `exiftool` (one command if possible, though it will fallback to multiple commands if needed).
-    *   **Process**: For each file in the chunk (parallelized):
-        *   Find JSON sidecar.
-        *   Determine target date and path.
-        *   Copy file to destination.
-        *   Prepare metadata write operations.
-    *   **Batch Write**: Write metadata updates for the chunk using `exiftool` (one command if possible, though it will fallback to multiple commands if needed).
+### Database Schema
+The database tracks two main entities:
+1.  **Files**: Represents a source file and its processing state.
+    -   `id`, `source_path`, `media_type`, `file_size`, `mtime`
+    -   `status`: `NEW`, `PENDING`, `IN_PROGRESS`, `SUCCESS`, `FAILED`, `SKIPPED`
+    -   `phase`: `DISCOVERY`, `METADATA_READ`, `TARGET_RESOLVED`, 'COPY', `METADATA_WRITE`
+    -   `target_path`: Resolved destination path.
+    -   `error_message`: Failure reason.
+2.  **Metadata**: Stores metadata from different sources for a file.
+    -   `file_id`
+    -   `source`: `JSON`, `MEDIA`, `MERGED`
+    -   `data`: JSON blob containing timestamp, gps, people, url, etc.
 
-### 2. Matching Logic
-1.  Check if it is a supported media file.
-2.  Attempt to locate its corresponding JSON sidecar file.
-    *   **Matching Rules**:
-        *   `filename.ext` -> `filename.ext.json` (Common)
-        *   `filename.ext` -> `filename.json` (Legacy/Some formats)
-        *   `filename.ext` -> `filename.ext.supplemental-metadata.json` (Supplemental Metadata)
-        *   `filename.ext` -> `filename.supplemental-metadata.json` (Supplemental Metadata)
-        *   `filename(n).ext` -> `filename.ext(n).json` (Duplicate handling quirk)
-        *   `filename(n).ext` -> `filename(n).json` (Duplicate handling fallback)
-    *   *If no JSON is found, log a warning and use existing file metadata if available.*
+## Phased Processing Workflow
+The processing logic is broken down into distinct, resumable phases. The tool can stop and resume at any phase.
 
-### 2. Metadata Extraction (from JSON)
-From the JSON file, extract:
--   **Timestamp**: `photoTakenTime.timestamp` (Unix timestamp).
--   **GPS**: `geoData.latitude`, `geoData.longitude`, `geoData.altitude`.
--   **People**: `people` (List of names).
--   **URL**: `url` (Google Photos link).
+### Phase 1: Discovery
+-   **Goal**: Identify all files to be processed.
+-   **Action**: Walk the source directory.
+-   **Logic**:
+    -   Insert new files into the DB with status `NEW`.
+    -   If a file already exists in the DB, skip (unless forced re-scan).
+    -   Identify `MediaType`.
 
-### 4. Metadata Reading (from Media)
-Using `PyExifTool`, read the media file's metadata.
-*   **Date/Time**:
-    *   Use `DateTimeOriginal`, `CreateDate` (EXIF).
-    *   Use `QuickTime:CreateDate` (QuickTime/Video).
-    *   Use `XMP:DateCreated` (XMP).
-    *   *Timezones*: QuickTime tags are written in UTC; others in local time.
-    *   *Priority*: Use JSON timestamp if media metadata is missing or invalid (Year < 1999).
-*   **GPS**:
-    *   Use `GPSLatitude`, `GPSLatitudeRef`, `GPSLongitude`, `GPSLongitudeRef`, `GPSAltitude` (EXIF).
-    *   Use `GPSCoordinates` (QuickTime).
-*   **People**:
-    *   Use `XMP:Subject`, `IPTC:Keywords`, `XMP:PersonInImage`.
-*   **URL**:
-    *   Use `ExifIFD:UserComment`, `XMP:UserComment`.
+### Phase 2: Metadata Extraction (Analysis)
+-   **Goal**: Gather all available metadata for `NEW` files.
+-   **Action**:
+    -   **JSON Sidecar**: Locate and parse the JSON sidecar. Store as `source='JSON'`.
+    -   **Media Metadata**: Batch read EXIF/IPTC/XMP from media files using `PyExifTool`. Store as `source='MEDIA'`.
+-   **State Transition**: `NEW` -> `METADATA_READ`.
 
-### 5. Merge Resolved Metadata
-Using the extracted metadata from the JSON and the read metadata from the media file, merge the metadata.
-1.  Determine the **Target Date**:
-    *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
-        *   *Condition*: Must be a valid timestamp (Year >= 1999).
-    *   **Priority 2**: JSON `photoTakenTime`.
-        *   *Condition*: Must be a valid timestamp (Year >= 1999).
-    *   **Fallback**: Use file modification time (`mtime`).
-2.  Determine the **Target GPS**:
-    *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
-    *   **Priority 2**: JSON `geoData`.
-3.  Determine the **Target People**:
-    *   **Merge and Deduplicate**: 
-    *   -   Media Metadata (EXIF/IPTC/XMP).
-    *   -   JSON `people`.
-4.  Determine the **Target URL**:
-    *   **Priority 1**: Media Metadata (EXIF/IPTC/XMP).
-    *   **Priority 2**: JSON `url`.
+### Phase 3: Resolution (Target & Merge)
+-   **Goal**: Determine where the file should go and what metadata it should have.
+-   **Action**:
+    -   **Merge Metadata**: Apply priority rules (Media > JSON > File) to create a `MERGED` metadata set.
+    -   **Resolve Target**: Determine the destination path (`YYYY/MM/filename.ext`).
+    -   **Collision Handling**: Check DB and filesystem for collisions. Resolve duplicates (e.g., `_1.jpg`).
+-   **State Transition**: `METADATA_READ` -> `TARGET_RESOLVED`.
 
-### 6. Metadata Writing (to Media)
-Using `PyExifTool`, update the media file **only if the target metadata is missing** (or as configured).
-*   Using the same extraction mappings as in Step #4, write the resolved metadata from Step #5 to the destination media file.
-
-*Command Construction*:
-The tool uses `PyExifTool`'s `get_tags` method to read tags in batch, which is more efficient and safer than constructing raw command strings.
-
-### 7. File Organization
-
-2.  Construct **Target Path**: `DESTINATION/YYYY/MM/filename.ext`.
-3.  **Handle Duplicates**:
-    *   If `filename.ext` exists in the destination:
-        *   Check if files are identical (resolved metadata). If so, skip.
-        *   If different, rename to `filename_1.ext`, `filename_2.ext`, etc.
-4.  **Copy/Move**:
-    *   Copy the file to the target.
-    *   Update the **File Modification Time** (`mtime`) of the destination file to the Target Date.
+### Phase 4: Execution (Copy & Write)
+-   **Goal**: Perform the physical file operations.
+-   **Action**:
+    -   **Copy**: Copy source file to `target_path`.
+    -   **Write Metadata**: Use `PyExifTool` to write the `MERGED` metadata to the destination file.
+    -   **Verify**: Check if file exists and has expected metadata (optional).
+-   **State Transition**: `TARGET_RESOLVED` -> `SUCCESS` (or `FAILED`).
 
 ## Grounding
 Ground the implementation details in the following projects and resources:
@@ -143,11 +110,12 @@ Ground the implementation details in the following projects and resources:
 -   https://exiftool.org/
 
 ## Error Handling
--   **Corrupt Files**: Log and skip.
--   **Missing JSON**: Log and proceed with best effort (use existing EXIF).
--   **ExifTool Failures**: Log error and continue.
+-   **Granular Tracking**: Errors are recorded in the DB (`error_message`) per file.
+-   **Resume**: Failed files can be retried by resetting their status.
+-   **Corrupt Files**: Logged as `FAILED` with specific error.
+-   **Missing JSON**: Logged, proceeds with available metadata.
 
 ## Future Considerations
--   Handle albums differently than photo directories.
--   Prevent processing/overwriting existing files.
--   Option to move instead of copy (to save space).
+-   **UI/TUI**: A progress bar or terminal UI showing counts per phase.
+-   **Verification Phase**: A separate phase to verify checksums of copied files.
+-   **Undo**: Ability to rollback operations based on DB state.

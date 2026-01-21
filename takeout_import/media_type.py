@@ -2,7 +2,8 @@ from pathlib import Path
 
 class MediaType:
 
-    def __init__(self, extensions: set[str], supports_exif: bool = False, supports_iptc: bool = False, supports_xmp: bool = False, supports_qt: bool = False, recognized: bool = True):
+    def __init__(self, type: str, extensions: set[str], supports_exif: bool = False, supports_iptc: bool = False, supports_xmp: bool = False, supports_qt: bool = False, recognized: bool = True):
+        self.type = type
         self.extensions = extensions
         self.supports_exif = supports_exif
         self.supports_iptc = supports_iptc
@@ -13,33 +14,42 @@ class MediaType:
     def supports_write(self) -> bool:
         return self.supports_exif or self.supports_iptc or self.supports_xmp or self.supports_qt
 
-UNKNOWN = MediaType(extensions=set(), recognized=False)
+UNKNOWN = MediaType("UNKNOWN", extensions=set(), recognized=False)
 
 SUPPORTED_MEDIA: dict[str, MediaType] = {}
 
 for media_type in [
     MediaType(
+        "IMAGE",
         {'.jpg', '.jpeg', '.jpe', '.png', '.tif', '.tiff'},
         supports_exif=True,
         supports_iptc=True,
         supports_xmp=True
     ),
     MediaType(
+        "IMAGE",
         {'.heic', '.heif', '.webp'},
         supports_exif=True,
         supports_xmp=True
     ),
     MediaType(
+        "VIDEO",
         {'.mp4', '.mov', '.m4v', '.3gp', '.mp'},
         supports_xmp=True,
         supports_qt=True
     ),
     MediaType(
+        "IMAGE",
         {'.gif'},
         supports_xmp=True
     ),
     MediaType(
-        {'.bmp', '.avi', '.wmv', '.mkv'}
+        "IMAGE",
+        {'.bmp'}
+    ),
+    MediaType(
+        "VIDEO",
+        {'.avi', '.wmv', '.mkv'}
     )
 ]:
     for ext in media_type.extensions:

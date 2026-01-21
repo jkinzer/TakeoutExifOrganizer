@@ -16,6 +16,10 @@ class MediaMetadata:
     gps: Optional[GpsData] = None
     url: Optional[str] = None
 
+    def __post_init__(self):
+        if isinstance(self.gps, dict):
+            self.gps = GpsData(**self.gps)
+
     READ_TAGS = [
         'DateTimeOriginal', 'CreateDate', 'ModifyDate', 'DateCreated', 
         'GPSLatitude', 'GPSLongitude', 'GPSAltitude', 'GPSCoordinates',

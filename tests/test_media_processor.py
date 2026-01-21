@@ -1,13 +1,12 @@
 import pytest
-import shutil
 import json
 import os
 from datetime import datetime
-from unittest.mock import MagicMock
 
 from takeout_import.media_processor import MediaProcessor
-from takeout_import.file_organizer import FileOrganizer
 from takeout_import.media_metadata import MediaMetadata
+from takeout_import.persistence_manager import PersistenceManager
+from takeout_import.media_type import get_media_type
 
 @pytest.fixture
 def processor(tmp_path):
@@ -15,7 +14,7 @@ def processor(tmp_path):
     dest_dir = tmp_path / "dest"
     source_dir.mkdir()
     dest_dir.mkdir()
-    return MediaProcessor(source_dir, dest_dir)
+    return MediaProcessor(source_dir, dest_dir, PersistenceManager.in_memory())
 
 @pytest.mark.parametrize("img_name, json_name", [
     ("image.jpg", "image.jpg.json"),
@@ -43,13 +42,27 @@ def test_motion_photo_mp_renaming(processor):
     json_file = processor.source_dir / "motion.json"
     
     # Create dummy JSON with timestamp
-    # Use a safe mid-year timestamp to avoid timezone issues (e.g. 2023-06-15)
     ts = 1686830400
     with open(json_file, 'w') as f:
         json.dump({"photoTakenTime": {"timestamp": str(ts)}}, f)
         
-    mock_media_type = MagicMock()
-    processor._process_single_file(mp_file, mock_media_type, MediaMetadata())
+    # Simulate DB record
+    media_type = get_media_type(mp_file)
+    file_id = processor.persistence.add_file(mp_file, media_type, 0, 0)
+    
+    # Simulate Metadata
+    json_metadata = MediaMetadata(timestamp=float(ts))
+    processor.persistence.save_metadata(file_id, 'JSON', json_metadata)
+    processor.persistence.save_metadata(file_id, 'MERGED', json_metadata) # Assume merged
+    
+    # Determine target path (Resolution Phase logic)
+    timestamp = processor._determine_timestamp(mp_file, MediaMetadata(), json_metadata)
+    target_path = processor.file_organizer.get_target_path(timestamp, mp_file.name)
+    processor.persistence.update_target_path(file_id, target_path)
+    
+    # Execute
+    file_record = processor.persistence.get_file_by_id(file_id)
+    processor._execute_single_file(file_record)
     
     # Expected: dest/2023/06/motion.mp4
     expected_dest = processor.dest_dir / "2023" / "06" / "motion.mp4"
@@ -81,88 +94,53 @@ def test_process_file_priority(processor):
     with open(json_file, 'w') as f:
         json.dump({"photoTakenTime": {"timestamp": str(int(ts_json))}}, f)
         
-    mock_media_type = MagicMock()
+    media_type = get_media_type(img)
 
     # Scenario 1: EXIF present and valid -> Should use EXIF (2022)
     ts_exif = datetime(2022, 1, 1).timestamp()
     media_metadata = MediaMetadata(timestamp=ts_exif)
+    json_metadata = MediaMetadata(timestamp=ts_json)
     
-    processor._process_single_file(img, mock_media_type, media_metadata)
+    timestamp = processor._determine_timestamp(img, media_metadata, json_metadata)
+    target_path = processor.file_organizer.get_target_path(timestamp, img.name)
     
-    # Check destination
-    expected_dest = processor.dest_dir / "2022" / "01" / "priority.jpg"
-    assert expected_dest.exists()
-    
-    # Cleanup for next scenario
-    shutil.rmtree(processor.dest_dir)
-    processor.dest_dir.mkdir()
-    processor.file_organizer = FileOrganizer(processor.dest_dir) # Re-init organizer with new dir
+    assert "2022" in str(target_path)
     
     # Scenario 2: EXIF missing -> Should use JSON (2021)
     media_metadata = MediaMetadata()
+    timestamp = processor._determine_timestamp(img, media_metadata, json_metadata)
+    target_path = processor.file_organizer.get_target_path(timestamp, img.name)
     
-    processor._process_single_file(img, mock_media_type, media_metadata)
-    
-    expected_dest = processor.dest_dir / "2021" / "01" / "priority.jpg"
-    assert expected_dest.exists()
-    
-    # Cleanup
-    shutil.rmtree(processor.dest_dir)
-    processor.dest_dir.mkdir()
-    processor.file_organizer = FileOrganizer(processor.dest_dir)
+    assert "2021" in str(target_path)
 
     # Scenario 3: EXIF invalid (<1999), JSON valid -> Should use JSON (2021)
     ts_invalid = datetime(1990, 1, 1).timestamp()
     media_metadata = MediaMetadata(timestamp=ts_invalid)
+    timestamp = processor._determine_timestamp(img, media_metadata, json_metadata)
+    target_path = processor.file_organizer.get_target_path(timestamp, img.name)
     
-    processor._process_single_file(img, mock_media_type, media_metadata)
-    
-    expected_dest = processor.dest_dir / "2021" / "01" / "priority.jpg"
-    assert expected_dest.exists()
-    
-    # Cleanup
-    shutil.rmtree(processor.dest_dir)
-    processor.dest_dir.mkdir()
-    processor.file_organizer = FileOrganizer(processor.dest_dir)
+    assert "2021" in str(target_path)
 
     # Scenario 4: EXIF invalid, JSON invalid -> Should use Mtime (2020)
-    # Update JSON to be invalid
-    with open(json_file, 'w') as f:
-        json.dump({"photoTakenTime": {"timestamp": str(int(ts_invalid))}}, f)
+    json_metadata = MediaMetadata(timestamp=ts_invalid)
+    timestamp = processor._determine_timestamp(img, media_metadata, json_metadata)
+    target_path = processor.file_organizer.get_target_path(timestamp, img.name)
     
-    media_metadata = MediaMetadata(timestamp=ts_invalid)
-    
-    processor._process_single_file(img, mock_media_type, media_metadata)
-    
-    expected_dest = processor.dest_dir / "2020" / "01" / "priority.jpg"
-    assert expected_dest.exists()
+    assert "2020" in str(target_path)
 
 def test_process_file_no_overwrite(processor):
     # Verify that if EXIF is valid, we do NOT overwrite it with JSON
     img = processor.source_dir / "overwrite.jpg"
     img.touch()
     
-    json_file = processor.source_dir / "overwrite.jpg.json"
-    # JSON has 2021
     ts_json = datetime(2021, 1, 1).timestamp()
-    with open(json_file, 'w') as f:
-        json.dump({"photoTakenTime": {"timestamp": str(int(ts_json))}}, f)
-        
-    # EXIF has 2022 (Valid)
     ts_exif = datetime(2022, 1, 1).timestamp()
+    
+    json_metadata = MediaMetadata(timestamp=ts_json)
     media_metadata = MediaMetadata(timestamp=ts_exif)
+    media_type = get_media_type(img)
     
-    # Call _process_single_file and check return value
-    mock_media_type = MagicMock()
-    result = processor._process_single_file(img, mock_media_type, media_metadata)
+    merged = processor._merge_metadata(img, media_type, media_metadata, json_metadata)
     
-    # Result should be (final_path, media_type, json_metadata)
-    assert result is not None
-    final_path, _, json_metadata_to_write = result
-    
-    # Verify 'timestamp' is NOT in the metadata to write (should be None)
-    assert json_metadata_to_write.timestamp is None
-    
-    # Also verify destination is based on EXIF (2022)
-    expected_dest = processor.dest_dir / "2022" / "01" / "overwrite.jpg"
-    assert expected_dest.exists()
+    # Verify 'timestamp' is None (preserved)
+    assert merged.timestamp is None
