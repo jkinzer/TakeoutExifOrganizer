@@ -94,12 +94,15 @@ def create_dummy_video(path: Path):
         # Create a 0-byte file so tests don't crash on 'not found', but they might fail on 'invalid'
         path.touch()
 
-def create_dummy_media(path: Path):
-    """Creates a valid media file (image or video) based on extension."""
+def is_video(path: Path) -> bool:
     ext = path.suffix.lower()
     video_extensions = {'.mp4', '.mov', '.m4v', '.3gp', '.avi', '.mkv', '.wmv', '.mp'}
+    return ext in video_extensions
+
+def create_dummy_media(path: Path):
+    """Creates a valid media file (image or video) based on extension."""
     
-    if ext in video_extensions:
+    if is_video(path):
         create_dummy_video(path)
     else:
         create_dummy_image(path)

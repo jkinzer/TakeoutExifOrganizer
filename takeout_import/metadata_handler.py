@@ -60,9 +60,8 @@ class MetadataHandler:
             # We need to be careful about matching.
             
             # Create a map of resolved path string to (Path, MediaType)
-            path_map = {str(f.resolve()): (file_path, media_type) for file_path, media_type in file_paths}
+            path_map = {str(file_path.resolve()): (file_path, media_type) for file_path, media_type in file_paths}
 
-            
             for data in data_list:
                 source_file = data.get('SourceFile')
                 if source_file:

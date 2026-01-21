@@ -1,10 +1,9 @@
-import unittest
-import tempfile
-import shutil
+import pytest
 import json
 import logging
 import sys
 import os
+import shutil
 from pathlib import Path
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -19,130 +18,122 @@ from tests.media_helper import create_dummy_media
 # Configure logging to capture output during tests if needed
 logging.basicConfig(stream=sys.stderr, level=logging.WARNING, force=True)
 
-class TestSystemFormats(unittest.TestCase):
+@pytest.fixture
+def test_dirs(tmp_path):
+    source_dir = tmp_path / "source"
+    dest_dir = tmp_path / "dest"
+    source_dir.mkdir()
+    dest_dir.mkdir()
+    return source_dir, dest_dir
+
+@pytest.fixture
+def handler():
+    return MetadataHandler()
+
+@pytest.mark.parametrize("ext, media_type", SUPPORTED_MEDIA.items())
+def test_all_formats_pipeline(test_dirs, handler, ext, media_type):
     """
-    System tests verifying support for all media formats.
+    System test for all supported formats.
+    Verifies:
+    1. JSON sidecar reading
+    2. File organization (copy to dest)
+    3. Metadata writing (tags)
     """
-    def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp())
-        self.source_dir = self.test_dir / "source"
-        self.dest_dir = self.test_dir / "dest"
-        self.source_dir.mkdir()
-        self.dest_dir.mkdir()
-        
-        self.handler = MetadataHandler()
+    source_dir, dest_dir = test_dirs
+    
+    # Timestamp to use for testing: 2023-01-01 12:00:00
+    test_timestamp = 1672574400.0 
+    test_dt = datetime.fromtimestamp(test_timestamp)
+    expected_year = str(test_dt.year)
+    expected_month = f"{test_dt.month:02d}"
+    
+    # Metadata to put in JSON sidecar
+    sidecar_metadata = {
+        "title": "Test Title",
+        "description": "Test Description",
+        "photoTakenTime": {
+            "timestamp": str(int(test_timestamp))
+        },
+        "geoData": {
+            "latitude": 37.7749,
+            "longitude": -122.4194,
+            "altitude": 0.0
+        },
+        "people": [{"name": "Person A"}, {"name": "Person B"}]
+    }
 
-    def tearDown(self):
-        shutil.rmtree(self.test_dir)
+    # 1. Setup Phase: Create file for this format
+    filename = f"test_file{ext}"
+    file_path = source_dir / filename
+    create_dummy_media(file_path)
+    
+    # Create corresponding JSON sidecar
+    json_path = source_dir / f"{filename}.json"
+    with open(json_path, 'w', encoding='utf-8') as f:
+        json.dump(sidecar_metadata, f)
 
-    def test_all_formats_pipeline(self):
-        """
-        System test for all supported formats.
-        Verifies:
-        1. JSON sidecar reading
-        2. File organization (copy to dest)
-        3. Metadata writing (tags)
-        """
-        # Timestamp to use for testing: 2023-01-01 12:00:00
-        test_timestamp = 1672574400.0 
-        test_dt = datetime.fromtimestamp(test_timestamp)
-        expected_year = str(test_dt.year)
-        expected_month = f"{test_dt.month:02d}"
-        
-        # Metadata to put in JSON sidecar
-        sidecar_metadata = {
-            "title": "Test Title",
-            "description": "Test Description",
-            "photoTakenTime": {
-                "timestamp": str(int(test_timestamp))
-            },
-            "geoData": {
-                "latitude": 37.7749,
-                "longitude": -122.4194,
-                "altitude": 0.0
-            },
-            "people": [{"name": "Person A"}, {"name": "Person B"}]
-        }
+    # Run the processor
+    processor = MediaProcessor(source_dir, dest_dir)
+    processor.process()
 
-        # 1. Setup Phase: Create files for all formats
-        created_files = []
-        for ext, media_type in SUPPORTED_MEDIA.items():
-            # Create media file
-            filename = f"test_file{ext}"
-            file_path = self.source_dir / filename
-            create_dummy_media(file_path)
-            created_files.append((file_path, media_type))
-            
-            # Create corresponding JSON sidecar
-            json_path = self.source_dir / f"{filename}.json"
-            with open(json_path, 'w', encoding='utf-8') as f:
-                json.dump(sidecar_metadata, f)
+    # 3. Verification Phase
+    # Check if file exists in destination
+    # Expected path: dest/YEAR/MONTH/filename
+    
+    # Handle .mp renaming
+    dest_filename = file_path.name
+    if file_path.suffix.lower() == '.mp':
+        dest_filename = file_path.stem + '.mp4'
+    
+    expected_dest_path = dest_dir / expected_year / expected_month / dest_filename
+    
+    assert expected_dest_path.exists(), f"File not found in destination: {expected_dest_path}"
+    
+    # Verify Metadata
+    # We need to read back the metadata from the destination file
+    # Note: Not all formats support all tags, so we check based on capabilities
+    
+    # Known formats where ExifTool write might fail or is not supported
+    SKIP_WRITE_VERIFICATION = {'.avi', '.mkv', '.wmv', '.bmp', '.gif'}
+    
+    if file_path.suffix.lower() not in SKIP_WRITE_VERIFICATION:
+        if media_type.supports_write():
+            try:
+                results = handler.read_metadata_batch([(expected_dest_path, media_type)])
+                if expected_dest_path in results:
+                    metadata = results[expected_dest_path]
+                    
+                    # Verify Timestamp (should match JSON)
+                    # Allow for small precision differences if any
+                    if metadata.timestamp is not None:
+                        assert metadata.timestamp == pytest.approx(test_timestamp, abs=1.0), f"Timestamp mismatch for {file_path.suffix}"
+                    else:
+                        pytest.fail(f"Timestamp missing for {file_path.suffix}")
 
-        # Run the processor
-        processor = MediaProcessor(self.source_dir, self.dest_dir)
-        processor.process()
+                    # Verify GPS (if supported)
+                    if metadata.gps:
+                        gps = metadata.gps
+                        assert gps.latitude == pytest.approx(37.7749, abs=0.001), f"Latitude mismatch for {file_path.suffix}"
+                        assert gps.longitude == pytest.approx(-122.4194, abs=0.001), f"Longitude mismatch for {file_path.suffix}"
 
-        # 3. Verification Phase
-        for source_path, media_type in created_files:
-            with self.subTest(ext=source_path.suffix):
-                # Check if file exists in destination
-                # Expected path: dest/YEAR/MONTH/filename
-                
-                # Handle .mp renaming
-                dest_filename = source_path.name
-                if source_path.suffix.lower() == '.mp':
-                    dest_filename = source_path.stem + '.mp4'
-                
-                expected_dest_path = self.dest_dir / expected_year / expected_month / dest_filename
-                
-                self.assertTrue(expected_dest_path.exists(), f"File not found in destination: {expected_dest_path}")
-                
-                # Verify Metadata
-                # We need to read back the metadata from the destination file
-                # Note: Not all formats support all tags, so we check based on capabilities
-                
-                # Known formats where ExifTool write might fail or is not supported
-                SKIP_WRITE_VERIFICATION = {'.avi', '.mkv', '.wmv', '.bmp', '.gif'}
-                
-                if source_path.suffix.lower() in SKIP_WRITE_VERIFICATION:
-                    continue
+                    # Verify People (if supported)
+                    if media_type.supports_xmp or media_type.supports_iptc:
+                        if metadata.people:
+                            expected_people = ["Person A", "Person B"]
+                            assert sorted(metadata.people) == sorted(expected_people), f"People mismatch for {file_path.suffix}"
+                        else:
+                            pytest.fail(f"People metadata missing for {file_path.suffix}")
 
-                if media_type.supports_write():
-                    try:
-                        results = self.handler.read_metadata_batch([(expected_dest_path, media_type)])
-                        if expected_dest_path in results:
-                            metadata = results[expected_dest_path]
-                            
-                            # Verify Timestamp (should match JSON)
-                            # Allow for small precision differences if any
-                            if metadata.timestamp is not None:
-                                self.assertAlmostEqual(metadata.timestamp, test_timestamp, delta=1.0, msg=f"Timestamp mismatch for {source_path.suffix}")
-                            else:
-                                self.fail(f"Timestamp missing for {source_path.suffix}")
+            except Exception as e:
+                pytest.fail(f"Failed to verify metadata for {file_path.suffix}: {e}")
 
-                            # Verify GPS (if supported)
-                            if metadata.gps:
-                                gps = metadata.gps
-                                self.assertAlmostEqual(gps.latitude, 37.7749, places=3, msg=f"Latitude mismatch for {source_path.suffix}")
-                                self.assertAlmostEqual(gps.longitude, -122.4194, places=3, msg=f"Longitude mismatch for {source_path.suffix}")
-
-                            # Verify People (if supported)
-                            if media_type.supports_xmp or media_type.supports_iptc:
-                                if metadata.people:
-                                    expected_people = ["Person A", "Person B"]
-                                    self.assertEqual(sorted(metadata.people), sorted(expected_people), f"People mismatch for {source_path.suffix}")
-                                else:
-                                    self.fail(f"People metadata missing for {source_path.suffix}")
-
-                    except Exception as e:
-                        self.fail(f"Failed to verify metadata for {source_path.suffix}: {e}")
-
-class TestSystemLogic(unittest.TestCase):
+class TestSystemLogic:
     """
     System tests verifying specific logic requirements (Duplicate handling, Merging, Priority).
     """
-    def setUp(self):
-        self.test_dir = Path(tempfile.mkdtemp())
+    @pytest.fixture(autouse=True)
+    def setup(self, tmp_path):
+        self.test_dir = tmp_path
         self.source_dir = self.test_dir / "source"
         self.dest_dir = self.test_dir / "dest"
         self.source_dir.mkdir()
@@ -152,9 +143,6 @@ class TestSystemLogic(unittest.TestCase):
         self.processor = MediaProcessor(self.source_dir, self.dest_dir)
         # Mock MetadataHandler to avoid external dependencies in unit logic test
         self.processor.metadata_handler = MagicMock()
-
-    def tearDown(self):
-        shutil.rmtree(self.test_dir)
 
     def test_duplicate_skip(self):
         # Create a file
@@ -191,10 +179,10 @@ class TestSystemLogic(unittest.TestCase):
             MediaMetadata(timestamp=timestamp)
         )
         
-        self.assertIsNone(result)
+        assert result is None
         
         # Verify no renamed file exists
-        self.assertFalse((dest_file.parent / "test_1.jpg").exists())
+        assert not (dest_file.parent / "test_1.jpg").exists()
 
     def test_people_merge(self):
         filename = "people.jpg"
@@ -224,11 +212,11 @@ class TestSystemLogic(unittest.TestCase):
         )
         
         # Verify result
-        self.assertIsNotNone(result)
+        assert result is not None
         path, mt, metadata_to_write = result
         
         # Expect merged: Alice, Bob, Charlie
-        self.assertEqual(metadata_to_write.people, ['Alice', 'Bob', 'Charlie'])
+        assert sorted(metadata_to_write.people) == sorted(['Alice', 'Bob', 'Charlie'])
 
     def test_url_priority(self):
         filename = "url.jpg"
@@ -258,11 +246,11 @@ class TestSystemLogic(unittest.TestCase):
         )
         
         # Verify result
-        self.assertIsNotNone(result)
+        assert result is not None
         path, mt, metadata_to_write = result
         
         # Expect 'url' to be absent from write metadata (preserved)
-        self.assertIsNone(metadata_to_write.url)
+        assert metadata_to_write.url is None
 
 if __name__ == '__main__':
     unittest.main()

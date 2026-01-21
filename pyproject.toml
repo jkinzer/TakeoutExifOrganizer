@@ -17,6 +17,7 @@ dependencies = [
     "Pillow",
     "opencv-python-headless",
     "pillow-heif",
+    "pytest",
 ]
 
 [project.urls]
