@@ -139,17 +139,12 @@ class MediaProcessor:
                     self.persistence.save_metadata(file_id, 'MERGED', merged_metadata)
                     
                     # Determine Timestamp for Path
-                    timestamp = self._determine_timestamp(file_path, media_metadata, json_metadata)
+                    timestamp = merged_metadata.timestamp
                     
                     # Resolve Target Path
                     target_path = self.file_organizer.get_target_path(timestamp, file_path.name)
                     
                     # Collision Handling (Preliminary)
-                    # We will handle actual collision during copy, but here we can try to resolve unique path
-                    # Note: In a distributed/parallel run, this might be race-condition prone if not careful.
-                    # For now, we just store the intended target.
-                    # Actually, the FileOrganizer.resolve_collision checks filesystem.
-                    # We should probably do it here to store the final intended path.
                     final_path = self.file_organizer.resolve_collision(target_path)
                     
                     self.persistence.update_target_path(file_id, final_path)
@@ -228,49 +223,17 @@ class MediaProcessor:
         # Check for identical file (Duplicate Skip)
         if target_path.exists():
             # 1. Check basic file attributes (Size/Mtime) via FileOrganizer
-            # Note: Mtime might differ if we updated it, but size should be same.
-            # Actually, if we already processed it, mtime should match the target timestamp.
-            # But we want to be robust.
             
             # 2. Check Metadata Identity
             # If we are about to write metadata, we should check if the existing file already has it.
             existing_metadata = self.metadata_handler.extract_metadata(target_path)
             
-            # We need to compare merged_metadata (what we want) with existing_metadata.
-            # If merged_metadata is None, we assume we just want to copy.
-            
-            if merged_metadata:
-                 # We need to construct a comparison object because merged_metadata might have Nones 
-                 # where we intend to preserve existing values. But here, merged_metadata IS the final state 
-                 # we derived in resolution phase.
-                 # Wait, in resolution phase `_merge_metadata` returned `proposed` which had Nones for preserved values.
-                 # So `merged_metadata` has Nones.
-                 # We need to fill in Nones with what was in MediaMetadata (if we had it).
-                 # But we don't have MediaMetadata handy here easily without querying DB.
-                 
-                 # Let's query MediaMetadata from DB.
-                 media_metadata = self.persistence.get_metadata(file_id, 'MEDIA')
-                 
-                 comparison_metadata = replace(merged_metadata)
-                 
-                 if media_metadata:
-                     if comparison_metadata.timestamp is None and media_metadata.timestamp is not None:
-                         comparison_metadata.timestamp = media_metadata.timestamp
-                     if comparison_metadata.gps is None and media_metadata.gps is not None:
-                         comparison_metadata.gps = media_metadata.gps
-                     if not comparison_metadata.people and media_metadata.people:
-                         comparison_metadata.people = media_metadata.people
-                     if comparison_metadata.url is None and media_metadata.url is not None:
-                         comparison_metadata.url = media_metadata.url
-                 
-                 if comparison_metadata.is_identical(existing_metadata):
-                     logger.info(f"Skipping identical file based on metadata: {source_path.name}")
-                     return None
+            if merged_metadata and merged_metadata.is_identical(existing_metadata):
+                logger.info(f"Skipping identical file based on metadata: {source_path.name}")
+                return None
 
-        # Determine timestamp for mtime
-        # We need to re-determine it or store it. 
-        # Let's re-determine from merged metadata or fallback.
-        timestamp = merged_metadata.timestamp if merged_metadata and merged_metadata.timestamp else source_path.stat().st_mtime
+        timestamp = (merged_metadata.timestamp if merged_metadata and merged_metadata.timestamp 
+                     else source_path.stat().st_mtime)
         
         self.file_organizer.copy_file(source_path, target_path, timestamp)
         
@@ -281,36 +244,24 @@ class MediaProcessor:
 
     def _merge_metadata(self, file_path: Path, media_type: MediaType, media_metadata: MediaMetadata, json_metadata: MediaMetadata) -> MediaMetadata:
         """Merges metadata according to priority rules."""
-        proposed = replace(json_metadata)
-        
-        if media_type.supports_write():
-            # Don't overwrite valid media timestamp with JSON timestamp
-            if media_metadata.timestamp and self._is_valid_timestamp(media_metadata.timestamp):
-                proposed.timestamp = None
-            
-            # Don't overwrite valid GPS with JSON GPS
-            if media_metadata.gps and proposed.gps:
-                proposed.gps = None
+        # JSON people overwrites media people if it's not None (even if empty list)
+        people = json_metadata.people if json_metadata.people is not None else media_metadata.people
 
-            # Merge People (Media + JSON)
-            merged_people = sorted(list(set(media_metadata.people + proposed.people)))
-            if merged_people and merged_people != media_metadata.people:
-                proposed.people = merged_people
-            
-            # Prioritize Media URL
-            if media_metadata.url and proposed.url:
-                proposed.url = None
-                
-        return proposed
+        return MediaMetadata(
+            timestamp = self._determine_timestamp(file_path, media_metadata, json_metadata),
+            gps = media_metadata.gps or json_metadata.gps,
+            people = people,
+            url = media_metadata.url or json_metadata.url
+        )
 
     def _determine_timestamp(self, file_path: Path, media_metadata: MediaMetadata, json_metadata: MediaMetadata) -> float:
         """Determines the best timestamp for the file."""
         # Priority 1: Media
-        if media_metadata.timestamp and self._is_valid_timestamp(media_metadata.timestamp):
+        if self._is_valid_timestamp(media_metadata.timestamp):
             return media_metadata.timestamp
         
         # Priority 2: JSON
-        if json_metadata.timestamp and self._is_valid_timestamp(json_metadata.timestamp):
+        if self._is_valid_timestamp(json_metadata.timestamp):
             return json_metadata.timestamp
             
         # Fallback: Mtime
@@ -318,7 +269,6 @@ class MediaProcessor:
 
     def _find_json_sidecar(self, media_path: Path) -> Optional[Path]:
         """Same as before..."""
-        # (Copying the logic from previous implementation)
         stems_to_check = [media_path.stem]
         if media_path.stem.endswith("-edited"):
             stems_to_check.append(media_path.stem[:-7])
@@ -356,6 +306,8 @@ class MediaProcessor:
         return (not file_path.stem.endswith("-edited")) and (media_type.recognized)
     
     def _is_valid_timestamp(self, timestamp: float) -> bool:
+        if timestamp is None:
+            return False
         try:
             dt = datetime.fromtimestamp(timestamp)
             return dt.year >= 1999

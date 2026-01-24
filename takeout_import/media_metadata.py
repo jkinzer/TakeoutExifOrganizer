@@ -12,7 +12,7 @@ class GpsData:
 @dataclass
 class MediaMetadata:
     timestamp: Optional[float] = None
-    people: List[str] = field(default_factory=list)
+    people: Optional[List[str]] = None
     gps: Optional[GpsData] = None
     url: Optional[str] = None
 
@@ -46,7 +46,7 @@ class MediaMetadata:
             metadata.url = url
             
         people = cls._extract_people_from_json(data)
-        if people:
+        if people is not None:
             metadata.people = people
             
         return metadata
@@ -86,8 +86,7 @@ class MediaMetadata:
             for person in data['people']:
                 if 'name' in person and person['name']:
                     people_names.append(person['name'])
-            if people_names:
-                return people_names
+            return people_names
         return None
 
     @classmethod
@@ -268,7 +267,7 @@ class MediaMetadata:
         if self.gps is not None:
             tags.update(self._prepare_gps_tags(media_type, self.gps))
             
-        if self.people:
+        if self.people is not None:
             tags.update(self._prepare_people_tags(media_type, self.people))
             
         if self.url:
@@ -364,10 +363,13 @@ class MediaMetadata:
                 return False
         
         # Check People
-        people1 = sorted(self.people)
-        people2 = sorted(other.people)
-        if people1 != people2:
+        p1 = self.people
+        p2 = other.people
+        if (p1 is None) != (p2 is None):
             return False
+        if p1 is not None and p2 is not None:
+            if sorted(p1) != sorted(p2):
+                return False
 
         # Check URL
         if self.url != other.url:

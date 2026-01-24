@@ -215,8 +215,51 @@ class TestSystemLogic:
         # Run merge
         merged = self.processor._merge_metadata(src_file, media_type, media_metadata, json_metadata)
         
-        # Expect merged: Alice, Bob, Charlie
-        assert sorted(merged.people) == sorted(['Alice', 'Bob', 'Charlie'])
+        # Expect JSON to overwrite Media: Bob, Charlie
+        assert sorted(merged.people) == sorted(['Bob', 'Charlie'])
+        
+        # Test empty JSON overwrites media
+        json_metadata_empty = MediaMetadata(people=[])
+        merged_empty = self.processor._merge_metadata(src_file, media_type, media_metadata, json_metadata_empty)
+        assert merged_empty.people == []
+
+    def test_people_no_json(self):
+        filename = "no_json.jpg"
+        src_file = self.source_dir / filename
+        src_file.touch()
+        
+        # Mock metadata
+        media_metadata = MediaMetadata(
+            timestamp=1600000000.0,
+            people=['Alice', 'Bob']
+        )
+        
+        media_type = get_media_type(src_file)
+        
+        merged = self.processor._merge_metadata(src_file, media_type, media_metadata, MediaMetadata())
+        
+        # Expect Media people to be preserved
+        assert sorted(merged.people) == sorted(['Alice', 'Bob'])
+
+    def test_timestamp_preservation(self):
+        filename = "time.jpg"
+        src_file = self.source_dir / filename
+        src_file.touch()
+        
+        # Mock metadata
+        media_ts = 1600000000.0
+        json_ts = 1700000000.0
+        
+        media_metadata = MediaMetadata(timestamp=media_ts)
+        json_metadata = MediaMetadata(timestamp=json_ts)
+        
+        media_type = get_media_type(src_file)
+        
+        # Run merge
+        merged = self.processor._merge_metadata(src_file, media_type, media_metadata, json_metadata)
+        
+        # Expect Media timestamp to be preserved in merged metadata
+        assert merged.timestamp == media_ts
 
     def test_url_priority(self):
         filename = "url.jpg"
@@ -241,5 +284,5 @@ class TestSystemLogic:
         # Run merge
         merged = self.processor._merge_metadata(src_file, media_type, media_metadata, json_metadata)
         
-        # Expect 'url' to be absent from write metadata (preserved)
-        assert merged.url is None
+        # Expect 'url' to be preserved from media
+        assert merged.url == 'http://original.com'

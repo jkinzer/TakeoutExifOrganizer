@@ -142,5 +142,5 @@ def test_process_file_no_overwrite(processor):
     
     merged = processor._merge_metadata(img, media_type, media_metadata, json_metadata)
     
-    # Verify 'timestamp' is None (preserved)
-    assert merged.timestamp is None
+    # Verify 'timestamp' is preserved from media
+    assert merged.timestamp == ts_exif
